@@ -494,6 +494,10 @@ class HTTPResponse(object):
             if key.lower() == hname:
                 return self.headers[key].lower()
         return ''
+    
+    # returns dictionary of header name, value
+    def getHeaders(self):
+        return self.headers
         
     def _parse_headers(self):
         # Parse length

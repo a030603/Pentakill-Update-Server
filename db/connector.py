@@ -118,12 +118,15 @@ class DB(object):
     # query 
     # 1. (arg1: string, multi=False) -> (Cursor or Exception)
     # 2. (arg1: string, arg2: tuple of string, multi=False) -> (Cursor or Exception)
-    # 3. multi=True -> iterator
+    # 3. multi=True -> arg1 is semi-colon separated multiple queries, in this case,
+    #                  don't use arg2 tuple to format arg1 string
     #
     # You can pass MySQL query string just by passing the complete one SQL string
     # (number 1 usage), or by passing SQL form string and tuple of data (number 2 usage)
     # When it succeeds it returns Cursor object from which you can fetch rows.
     # Otherwise it raises Exception which contains error code and message of detail
+    # Note : It is encouraged to use second usage for security. 
+    #        First usage may suffer from malicious attack(e.g. SQL injection)
     def query(self, arg1, arg2=None, multi=False, buffered=False):
         buffered = buffered or self._buffered
         
@@ -151,7 +154,7 @@ class DB(object):
                 result = cursor.execute(arg1, arg2, multi=multi)
 
         except Error as err:
-            raise error.QueryError('DB error ' + str(err), error.E_QUERY_ERROR)
+            raise error.QueryError(str(err), error.E_QUERY_ERROR)
         except Exception as err:
             raise error.PythonBuiltInError(str(err), error.E_PYTHON_ERROR)
         else:
@@ -216,6 +219,17 @@ class Cursor(object):
     def fetchMany(self, size=1):
         return self.cursor.fetchmany(size)
     
+    # fetch all remaining rows
+    # When no more rows, MySQL connector raises InterfaceError,
+    # it catches it and returns empty list, which is consistent to 
+    # fetchMany method.
+    def fetchAll(self):
+        try:
+            return self.cursor.fetchall()
+        except InterfaceError as err:
+            return []
+        
+    
     # with MySQLCursor, you can use for loop to
     # fetch each row
     def getCursor(self):
@@ -225,7 +239,7 @@ class Cursor(object):
     # if 'num' is not given, it fetches all rows
     # proc must return True or something equivalent to that
     # it precedure successful, return False or equivalence when not.
-    # it returns when all rows are done or it fails
+    # it returns when all rows are done or it fails.
     def proceed(self, proc, num=None):
         left = num
         row = self.fetchRow()
@@ -271,7 +285,7 @@ class Cursor(object):
             self.db.state = S_INIT
             self.db = None
         
-class pentakillDB(DB):
+class PentakillDB(DB):
     def __init__(self):
         DB.__init__(self, configs.pentakill)
         
@@ -281,13 +295,14 @@ class pentakillDB(DB):
 if __name__ == '__main__':    
     print Error
     try:
-        db = pentakillDB()
+        db = PentakillDB()
         db.init()
     except AttributeError as err:
         raise err
     else:
         query = ("SELECT s_name, s_id FROM summoners "
                  "WHERE s_id > %s "
+                 "ORDER BY s_id desc "
                  "LIMIT 10")
         query2 = ("SELECT s_name, s_id FROM summoners "
                  "WHERE s_id = %s "
@@ -298,7 +313,7 @@ if __name__ == '__main__':
         result = db.begin()
         print result
         result = db.query("insert into summoners (s_id, s_name, s_name_abbre) "
-                          "values (1111111, \'fucking\', \'fucking\')")
+                          "values (1111112, \'zzzz\', \'zzzz\')")
         print result
         result.close()
         result = db.rollback()
@@ -307,24 +322,43 @@ if __name__ == '__main__':
         result = db.begin()
         print result
         result = db.query("insert into summoners (s_id, s_name, s_name_abbre) "
-                          "values (1111112, \'fucking\', \'fucking\')")
+                          "values (1111112, \'zzzz\', \'zzzz\')")
         print result
         result.close()
         result = db.rollback()
         print result
         
+        result = db.begin()
+        print result
+        result = db.query("delete from summoners "
+                          "where s_id = 1111112")
+        print result
+        result.close()
+        result = db.rollback()
+        print result        
+        
         db.begin()
         result = db.query(query, data)
     
         def proc(row):
-            print row
+            print 'Summonfer ' + str(row[1]), row[0].encode('cp949')
+            print result.cursor.rowcount
             return True
-        for row in result.cursor:
-            print 'a' + str(row)
+        i = 0
+        for row in result:
+            print 'Summoner ' + str(row[1]), row[0].encode('cp949')
+            print result.cursor.rowcount            
+            if i > 4:
+                break
+            i = i + 1
         if result.proceed(proc): 
             print 'success' 
         else: 
             print 'fail'
+        print 'fetchrow', result.fetchRow()
+        print 'fetchmany1', result.fetchMany(1)
+        print 'fetchmany5', result.fetchMany(5)
+        print 'fetchall', result.fetchAll()
         result.close()
         # show results
         #for row in result:
@@ -344,7 +378,7 @@ if __name__ == '__main__':
 # but for utility, it is good to make one cursor for each query
 if __name__ == '__main__':    
     def testBufferMode():
-        #db = pentakillDB()
+        #db = PentakillDB()
         #db.init(buffered=False)
         
         query1 = ("select * from (select s_id, s_name from summoners where s_id >= %s "
@@ -360,7 +394,7 @@ if __name__ == '__main__':
         query4 = ("select s_id, s_name from summoners where s_id = %s "
                   "order by s_id "
                   "LIMIT 10")
-        arg = ("2576538",)
+        arg = (2576538,)
         arg2 = ("1135567",)
         arg3 = ("2060871",)
         args = [arg, arg2, arg3, arg, arg2]
@@ -372,11 +406,12 @@ if __name__ == '__main__':
             if row[0] != int(arg[0]):
                 raise Exception
             #print row
-            for row in cursor:
-                pass
-                #print row
+            cursor.fetchAll()
             return cursor
         
+        # execute 3**n number of n query tests
+        # n consecutive query test in which queries are all possible permutations
+        # of set {(buffered, close), (not buffered, close), (buffered, not close)}
         def testChain (n, query, args):
             it = []
             num = 0
@@ -409,7 +444,7 @@ if __name__ == '__main__':
                 
         # list of (query, arg, buffer, close)
         def do(args):
-            db = pentakillDB()
+            db = PentakillDB()
             db.init()
             
             for i in args:
@@ -428,7 +463,7 @@ if __name__ == '__main__':
 
 if __name__ == '__main__':    
     try:
-        db = pentakillDB()
+        db = PentakillDB()
         db.init()
     except AttributeError as err:
         raise err
@@ -436,8 +471,8 @@ if __name__ == '__main__':
         query = ("INSERT INTO summoners (s_id, s_name, s_name_abbre) "
                  "VALUES (%s, \"%s\", \"%s\")")
         delete = ("delete from summoners where s_id = %s")
-        data = ("2576539", "Murphy", "Murphy")
-        data2 = ("2576539",)
+        data = (2576539, "Murphy", "Murphy")
+        data2 = (2576539,)
         try:
             result = db.query(delete, data2)
             result.close()
@@ -458,14 +493,14 @@ if __name__ == '__main__':
 
 
 if __name__ == '__main__':
-    db = pentakillDB()
+    db = PentakillDB()
     db.init(timeout=0.5)
     cursor = db.cursor
     results = cursor.execute('select 1; select 2; select 3;', multi=True)
     print results != cursor
     #cursor.execute('select 1;')
     for result in results:
-        print result.fetchone()
+        print result.fetchall()
         
     print 'second'
     

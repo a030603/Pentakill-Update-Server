@@ -201,7 +201,6 @@ class _TimerEventManager(object):
         
     def _timer_func_factory(self, method, name, id):
         def timer_start():
-            print 'start'
             method(name=name, id=id)
         return timer_start
     
@@ -372,6 +371,15 @@ class LOLAdmin(object):
         self.global_after_req_mutex = threading.Semaphore(1)
         self.get_data_mutex = threading.Semaphore(1)
         
+    # Get information of admin
+    def get_spec(self):
+        r = {}
+        r['key'] = self.key
+        r['req_num'] = self.req_num
+        r['per_time'] = self.per_time
+        r['core_num'] = self.core_num
+        return r
+    
     # Initializes cores
     def init(self):
         start = self.state.start_state_switch((S_IDLE,))
@@ -665,6 +673,12 @@ class LOLAdmin(object):
             self.state.end_event()
         
         return data
+    
+    # request test data
+    def get_test_data(self):
+        #self._debug_msg('request test data')
+        td = self.get_data(lolapi.LOLAPI.get_summoners_by_names, (u'\uba38\ud53c93'.encode('utf8'), ))
+        return td
     
     # if 'mode' is true, set to debug mode
     # otherwise, turn off debug mode
@@ -985,14 +999,17 @@ class _ServiceUnavailablePolicy(object):
 # LOL API with fast multiple request object  
 # This provides functionality that one thread can send multiple request
 # at once.
-class LOLFastAPI(LOLAdmin):
+class LOLFastAPI(object):
     def __init__(self, servants=None, limit=None, key=None, cores=None, api=None):
-        LOLAdmin.__init__(self, limit, key, cores, api)
+        self.admin = LOLAdmin(limit, key, cores, api)
         self.servant_num = servants if servants else config.SERVANT_NUM
         self.servants = []   # list of servant thread objects
         self.servant_idx = 0 # next servant index
         
         self.get_mutex = threading.Lock()
+        
+        self.keep_alive_on = False
+        self.spec = self.admin.get_spec()
     
     # Commands master can give to servant
     FCMD_DIE = 0    # stop routine and return
@@ -1001,6 +1018,7 @@ class LOLFastAPI(LOLAdmin):
         def __init__(self, master):
             threading.Thread.__init__(self)
             self.master = master
+            self.admin = master.admin
             import collections
             # object in request is form of (cmd, arg)
             # 'cmd' is one of FCMD_* value
@@ -1023,12 +1041,22 @@ class LOLFastAPI(LOLAdmin):
         def routine(self):
             while True:
                 self.cond.acquire()
+                first = True
                 while True:
                     try:
                         tup = self.requests.popleft()
-                        break
+                        first = True
+                        break                                 
                     except IndexError:
-                        self.cond.wait()
+                        self.cond.release()
+                        if not first and self.master.keep_alive_on:
+                            try:
+                                self.admin.get_test_data()
+                            except Exception:
+                                pass
+                        first = False
+                        self.cond.acquire()
+                        self.cond.wait(config.KEEP_ALIVE_INTERVAL)          
                 self.cond.release()
                 
                 cmd = tup[0]
@@ -1041,11 +1069,11 @@ class LOLFastAPI(LOLAdmin):
             try:
                 cmd_arg = tup[1]
                 req_iter_tup = cmd_arg[1]
-                req_num = req_iter_tup[0]
+                req_name = req_iter_tup[0]
                 req_tup = req_iter_tup[1]
                 method = req_tup[0]
                 args = req_tup[1]
-                result = self.master.get_data(method, args)
+                result = self.admin.get_data(method, args)
             except TimeoutError as err:
                 res_tup = (FS_TIMEOUT, str(err))
             except ServiceUnavailableError as err:
@@ -1056,10 +1084,11 @@ class LOLFastAPI(LOLAdmin):
                 res_tup = (FS_OK, result)
                 
             res = cmd_arg[0]
-            res.add_response(req_num, res_tup)
+            res.add_response(req_name, res_tup)
             
     # Initialize serving threads
     def start_multiple_get_mode(self):
+        self.admin.init()
         for i in range(self.servant_num):
             servant = self._servant(self)
             self.servants.append(servant)
@@ -1084,15 +1113,24 @@ class LOLFastAPI(LOLAdmin):
         self.get_mutex.acquire()
         req_num = fast_req.get_request_num()
         res = FastResponse(req_num)
-        res.start_response()
         for req_tup in fast_req:
             get_tup = (self.FCMD_GET, (res, req_tup))
             servant = self.servants[self.servant_idx]
             servant.order(get_tup)
             self.servant_idx += 1
             self.servant_idx %= self.servant_num
+        #print 'adddddded'
         self.get_mutex.release()
         return res
+    
+    def set_keep_alive(self, level):
+        self.keep_alive_on = level
+        
+    def set_debug(self, level):
+        self.admin.set_debug(level)
+        
+    def get_spec(self):
+        return self.spec
 
 # Fast response status codes
 FS_OK = 0
@@ -1104,29 +1142,27 @@ class FastResponse(object):
     def __init__(self, req_num):
         self.req_num = req_num
         self.response_num = 0
-        self.responses = None
+        self.responses = {}
         self.cond = threading.Condition()
         
     # return iterator object for responses
+    # it iterates through only non-read new responses
     def __iter__(self):
-        n = self.response_num
-        for i in range(n):
-            yield self.responses[i]
-    
-    # Start responding
-    # After calling this, further new request is forbidden
-    def start_response(self):
-        self.responses = [None]*self.req_num
+        for name in self.responses:
+            if not self.responses[name][1]:
+                continue
+            self.responses[name][1] = False
+            yield (name, self.responses[name][0])
         
     # Add response
     # If all requests are served, it notifies requester
-    # n: index of corresponding request in request list
+    # name: name of request in request dictionary
     # tuple : tuple (status_code, data)
     #         'status code' is one of FS_* value
     #         'data' is returned data from API or error message
-    def add_response(self, n, tuple):
+    def add_response(self, name, tuple):
         self.cond.acquire()
-        self.responses[n] = tuple
+        self.responses[name] = [tuple, True] # data, unread(True)
         self.response_num += 1
         # notify requestor
         if self.response_num >= self.req_num:
@@ -1151,29 +1187,42 @@ class FastResponse(object):
     
     # If responded, it will return tuple
     # If not responded, return None
-    def get_response(self, n):
-        return self.responses[n]
+    def get_response(self, name):
+        if name in self.responses:
+            self.responses[name][1] = False
+            return self.responses[name][0]
+        return None
+    
+    # returns next unread response
+    # if no new reponse, return None
+    def next_response(self):
+        iter = self.__iter__()
+        try:
+            return iter.next()
+        except StopIteration:
+            return None
         
     
 class FastRequest(object):
     def __init__(self):
         # list of tuple (method, arg)
         self.req_num = 0
-        self.reqs = []
+        self.counter = 0
+        self.reqs = {}
         
+    # it is actually not redundant
     class _iterator(object):
-        def __init__(self, l):
-            self.l = l
-            self.n = len(l)
-            self.i = 0
+        def __init__(self, reqs):
+            self.reqs = reqs
+            self.iter = reqs.__iter__()
         
         # returns tuple (index of request, request tuple)
         def next(self):
-            if not self.i < self.n:
+            try:
+                name = self.iter.next()
+                return (name, self.reqs[name])
+            except StopIteration:
                 raise StopIteration()
-            ret = (self.i, self.l[self.i])
-            self.i += 1
-            return ret
         
     # return iterator object for requests
     def __iter__(self):
@@ -1183,9 +1232,18 @@ class FastRequest(object):
     # tuple: tuple (method, arg)
     #        'method' is API method, 'arg' is tuple of arguments
     #        to the method
+    # beware that internal counter may conflict with name of request
+    # added by add_request_name method, vice versa.
     def add_request(self, tuple):
-        self.reqs.append(tuple)
+        self.reqs[self.counter] = tuple
+        self.counter += 1
         self.req_num += 1
+        
+    # name : request name string
+    # tuple : tuple (method, arg) 
+    #         meaning is same as add_request method
+    def add_request_name(self, name, tuple):
+        self.reqs[name] = tuple
         
     def get_request_num(self):
         return self.req_num
@@ -1244,21 +1302,34 @@ class PolicyFailedError(Error):
         Error.__init__(self, msg, E_POLICY_FAILED)    
         
 # tests
-
-if __name__ == '__main__':
+if __name__ == '__mafin__':
+    print 'keep alive test'
     API = LOLFastAPI()
-    API.init()
     API.set_debug(True)
-    print 'start'
     API.start_multiple_get_mode()
+    API.set_keep_alive(True)
+    for i in range(2):
+        time.sleep(10)
+        print (i + 1) * 10, 'sec elapsed'
+    time.sleep(2)
+    API.close_multiple_get_mode()
+    
+if __name__ == '__main__':
+    #time.sleep(1)
+    print 'fast api multiple request test'
+    API = LOLFastAPI()
+    API.set_debug(True)
+    API.start_multiple_get_mode()
+    API.set_keep_alive(True)
     print 'started multiple mode'
     for i in range(5):
         req = FastRequest()
         for i in range(10):
             req.add_request((lolapi.LOLAPI.get_summoners_by_names, (u'\uba38\ud53c93'.encode('utf8'),)))
         res = API.get_multiple_data(req)
-        res.wait_response()
-        for r in res:
+        res.wait_response(10)
+        for t in res:
+            r = t[1]
             v = r[0]
             if v == 0:
                 status = 'OK'
@@ -1272,15 +1343,16 @@ if __name__ == '__main__':
                 status = 'UNKNOWN'
             print status, r[1][0]
         import random
-        time.sleep(random.random() * 10)
+        time.sleep(random.random() * 5)
     API.close_multiple_get_mode()
     print 'closed multiple mode'
     
 # Multiple threads request simultaneously multiple times with random time interval
 # If error occurs, it try again until it succeeds
-if __name__ == '__main__':
+if __name__ == '__mafin__':
     import random
-    API = LOLFastAPI()
+    print 'admin test'
+    API = LOLAdmin()
     API.init()
     API.set_debug(True)
     s1 = threading.Semaphore(1)

@@ -223,6 +223,7 @@ class LOLAPI(object):
         
             try:
                 content = msg.readDecompress()
+                #print msg.getHeaders()
             # let's parse json string into python dictionary
             except http.InvalidUseException as err:
                 raise HTTPFail(str(err), E_HTTP)
@@ -702,11 +703,11 @@ if __name__ == '__main__':
     api = LOLAPI()
     api.init()
     content = api.get_match_history(2576538, seasons='SEASON2015,SEASON2014')
-    print content[1]
+    #print content[1]
     api.close()
     
 # tests
-if __name__ == '__m2ain__':
+if __name__ == '__main__':
     import time 
     api = LOLAPI()
     api.init()
@@ -721,10 +722,10 @@ if __name__ == '__m2ain__':
     print s_id
 
     print '########## summoner info ##############'
-    content = api.get_summoners_by_names(u'\uba38\ud53c93'.encode('utf8'))
+    content = api.get_summoners_by_ids(2576538)
     print content[0]
     content = content[1]
-    s_id = content[u'\uba38\ud53c93']['id']
+    #s_id = content[u'\uba38\ud53c93']['id']
     print s_id
     #print content
     
