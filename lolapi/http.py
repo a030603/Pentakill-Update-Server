@@ -300,6 +300,7 @@ class HTTP(object):
         
         return response
     
+    # close function will never raise exception
     def close(self):
         if self.sock:
             self.sock.close()
@@ -682,6 +683,7 @@ class HTTPResponse(object):
         except zlib.error as err:
             raise DecompressFail(str(err), E_DECOMPRESS_FAIL)
     
+    # close function will never raise exception
     def close(self):
         # if will_close, close socket
         if self.will_close:

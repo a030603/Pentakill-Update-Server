@@ -169,8 +169,8 @@ class _StateMachine(object):
                 found = True
                 break
         if not found or self.state_switch:
-            if self.state_switch:
-                self.state_switch = False
+            #if self.state_switch:
+            #    self.state_switch = False
             ret = (False, self.state, self.state_switch)
             self.state_condition.release()
             return ret
@@ -181,7 +181,7 @@ class _StateMachine(object):
         self.state_condition.release()
         return ret
     
-    # Event state switching event started before
+    # Enc state switching event started before
     def end_state_switch(self):
         self.state_condition.acquire()
         self.state_switch = False
@@ -569,8 +569,9 @@ class LOLAdmin(object):
                         self._call_service_available()
                         ret = True
                     break
+            break
         self.sync_mutex.release()
-            
+        
         self.state.end_event()
         return ret
     
@@ -790,6 +791,16 @@ class LOLCore(object):
                     if not self.policy.push_timeout():
                         self.admin._call_service_unavailable()
                     raise TimeoutError('Timeout')
+                except (lolapi.InitializationFail, lolapi.InvalidUse) as err:
+                    # currently, there's no case would come to here
+                    if not self.policy.push_error():
+                        self.admin._call_service_unavailable()
+                    self._close_api()
+                    try:
+                        self._init_api()
+                    except lolapi.InitializationFail as err:
+                        raise InternalError(str(err))
+                    raise InternalError(str(err))
                 except lolapi.Error as err:
                     if not self.policy.push_error():
                         self.admin._call_service_unavailable()
@@ -1003,8 +1014,9 @@ class LOLFastAPI(object):
     def __init__(self, servants=None, limit=None, key=None, cores=None, api=None):
         self.admin = LOLAdmin(limit, key, cores, api)
         self.servant_num = servants if servants else config.SERVANT_NUM
-        self.servants = []   # list of servant thread objects
-        self.servant_idx = 0 # next servant index
+        self.servants = []                          # list of servant thread objects
+        self.servant_idx = 0                        # next servant index
+        self.state = _StateMachine(LOLFastAPI.S_OK) # state of servants
         
         self.get_mutex = threading.Lock()
         
@@ -1014,11 +1026,16 @@ class LOLFastAPI(object):
     # Commands master can give to servant
     FCMD_DIE = 0    # stop routine and return
     FCMD_GET = 1    # get api data
+    
+    # Servant state
+    S_OK = 0        # OK
+    S_SU = 1        # service unavailable
     class _servant(threading.Thread):
-        def __init__(self, master):
+        def __init__(self, master, id):
             threading.Thread.__init__(self)
             self.master = master
             self.admin = master.admin
+            self.id = id
             import collections
             # object in request is form of (cmd, arg)
             # 'cmd' is one of FCMD_* value
@@ -1027,6 +1044,9 @@ class LOLFastAPI(object):
             # FCMD_GET, (fastResponse, tuple returned by fastRequest iterator)
             self.requests = collections.deque()
             self.cond = threading.Condition()
+            
+            # servant is state machine
+            self.state = self.master.state
         
         def run(self):
             self.routine()
@@ -1037,33 +1057,59 @@ class LOLFastAPI(object):
             self.requests.append(tup)
             self.cond.notify()
             self.cond.release()
-        
+            
+        # only number 0 servant is in charge of checking status
+        def _check_status(self):
+            if not self.state.start_event([LOLFastAPI.S_SU])[0]:
+                return
+            if self.admin.check_service_status():
+                self.state.end_event()
+                if not self.state.start_state_switch([LOLFastAPI.S_SU])[0]:
+                    return
+                self.state.switch_state(LOLFastAPI.S_OK)
+                self.state.end_state_switch()
+            else:
+                self.state.end_event()
+            
         def routine(self):
             while True:
                 self.cond.acquire()
                 first = True
+                loop = 0
                 while True:
                     try:
-                        tup = self.requests.popleft()
+                        #print 'LOOP START (' + str(self.id) + ')'
+                        if loop < 2:
+                            loop += 1
+                            tup = self.requests.popleft()
+                        else:
+                            loop = 0
+                            if self.id == 0:
+                                self._check_status()
                         first = True
                         break                                 
                     except IndexError:
                         self.cond.release()
-                        if not first and self.master.keep_alive_on:
-                            try:
-                                self.admin.get_test_data()
-                            except Exception:
-                                pass
+                        if self.state.start_event([LOLFastAPI.S_OK])[0]:
+                            if not first and self.master.keep_alive_on:
+                                try:
+                                    self.admin.get_test_data()
+                                except Exception:
+                                    pass
+                            self.state.end_event()
+                        elif self.id == 0:
+                            self._check_status()
                         first = False
                         self.cond.acquire()
-                        self.cond.wait(config.KEEP_ALIVE_INTERVAL)          
+                        self.cond.wait(config.KEEP_ALIVE_INTERVAL)
                 self.cond.release()
                 
                 cmd = tup[0]
-                if cmd == self.master.FCMD_DIE:
+                if cmd == LOLFastAPI.FCMD_DIE:
                     break
-                elif cmd == self.master.FCMD_GET:
+                elif cmd == LOLFastAPI.FCMD_GET:
                     self._serve_get(tup)
+                    
                     
         def _serve_get(self, tup):
             try:
@@ -1073,24 +1119,45 @@ class LOLFastAPI(object):
                 req_tup = req_iter_tup[1]
                 method = req_tup[0]
                 args = req_tup[1]
-                result = self.admin.get_data(method, args)
-            except TimeoutError as err:
-                res_tup = (FS_TIMEOUT, str(err))
-            except ServiceUnavailableError as err:
-                res_tup = (FS_SERVICE_UNAVAILABLE, str(err))
-            except (Error, Exception) as err:
+                res = cmd_arg[0]
+            except Exception as err:
                 res_tup = (FS_ERROR, str(err))
+                res.add_response(req_name, res_tup)
+                return
+            
+            if self.state.start_event([LOLFastAPI.S_OK])[0]:
+                do_end = True
+                try:
+                    result = self.admin.get_data(method, args)
+                except TimeoutError as err:
+                    res_tup = (FS_TIMEOUT, str(err))
+                except ServiceUnavailableError as err:
+                    res_tup = (FS_SERVICE_UNAVAILABLE, str(err))
+                    # Go to service unavailable state
+                    do_end = False
+                    self.state.end_event()
+                    if self.state.start_state_switch([LOLFastAPI.S_OK])[0]:                        
+                        self.state.switch_state(LOLFastAPI.S_SU)
+                        self.state.end_state_switch()
+                except (Error, Exception) as err:
+                    res_tup = (FS_ERROR, str(err))
+                else:
+                    res_tup = (FS_OK, result)
+                    
+                if do_end:
+                    self.state.end_event()
+                    
             else:
-                res_tup = (FS_OK, result)
+                res_tup = (FS_SERVICE_UNAVAILABLE, "Service unavailable,"
+                           " servant is trying to restore problem")
                 
-            res = cmd_arg[0]
             res.add_response(req_name, res_tup)
             
     # Initialize serving threads
     def start_multiple_get_mode(self):
         self.admin.init()
         for i in range(self.servant_num):
-            servant = self._servant(self)
+            servant = self._servant(self, i)
             self.servants.append(servant)
             servant.daemon = True
             servant.start()
@@ -1145,14 +1212,37 @@ class FastResponse(object):
         self.responses = {}
         self.cond = threading.Condition()
         
+    class _iterator(object):
+        def __init__(self, responses, cond):
+            self.responses = responses
+            self.cond = cond
+            self.cond.acquire()
+            self.iter = self.responses.__iter__()
+            
+        def next(self):
+            while True:
+                try:
+                    name = self.iter.next()
+                    if not self.responses[name][1]:
+                        continue
+                    self.responses[name][1] = False
+                    return (name, self.responses[name][0])
+                except StopIteration:
+                    self.cond.release()
+                    raise StopIteration()
+            
+        def close(self):
+            while True:
+                try:
+                    self.iter.next()
+                except StopIteration:
+                    break
+            self.cond.release()
+            
     # return iterator object for responses
     # it iterates through only non-read new responses
     def __iter__(self):
-        for name in self.responses:
-            if not self.responses[name][1]:
-                continue
-            self.responses[name][1] = False
-            yield (name, self.responses[name][0])
+        return self._iterator(self.responses, self.cond)
         
     # Add response
     # If all requests are served, it notifies requester
@@ -1198,9 +1288,19 @@ class FastResponse(object):
     def next_response(self):
         iter = self.__iter__()
         try:
-            return iter.next()
+            result = iter.next()
+            iter.close()
+            return result
         except StopIteration:
             return None
+        
+    # returns true if all requests are responded,
+    # false otherwise.
+    def responded_all(self):
+        self.cond.acquire()
+        result = self.req_num <= self.response_num
+        self.cond.release()
+        return result
         
     
 class FastRequest(object):
@@ -1244,6 +1344,7 @@ class FastRequest(object):
     #         meaning is same as add_request method
     def add_request_name(self, name, tuple):
         self.reqs[name] = tuple
+        self.req_num += 1
         
     def get_request_num(self):
         return self.req_num
@@ -1321,13 +1422,17 @@ if __name__ == '__main__':
     API.set_debug(True)
     API.start_multiple_get_mode()
     API.set_keep_alive(True)
+    ids = [2577586, 2580719, 2610449, 2705388, 2706560, 2712005, 2714978, 2716219, 2726954, 2730142]
     print 'started multiple mode'
-    for i in range(5):
+    for i in range(20):
         req = FastRequest()
-        for i in range(10):
-            req.add_request((lolapi.LOLAPI.get_summoners_by_names, (u'\uba38\ud53c93'.encode('utf8'),)))
+        #for i in range(10):
+        #    req.add_request((lolapi.LOLAPI.get_summoners_by_names, (u'\uba38\ud53c93'.encode('utf8'),)))
+        for id in ids:
+            req.add_request((lolapi.LOLAPI.get_summoners_by_ids, (id,)))
         res = API.get_multiple_data(req)
-        res.wait_response(10)
+        while not res.wait_response(10):
+            pass
         for t in res:
             r = t[1]
             v = r[0]
@@ -1341,7 +1446,12 @@ if __name__ == '__main__':
                 status = 'SERVICE UNAVAILABLE'
             else:
                 status = 'UNKNOWN'
-            print status, r[1][0]
+            if v == 0:
+                for name in r[1][1]:
+                    name = r[1][1][name]["name"]
+                print status, name
+            else:
+                print status, r[1]
         import random
         time.sleep(random.random() * 5)
     API.close_multiple_get_mode()

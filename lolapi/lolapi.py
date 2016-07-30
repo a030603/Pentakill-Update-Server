@@ -171,19 +171,23 @@ class LOLAPI(object):
         else:
             conn.putHeader('Accept-Encoding', 'gzip')
         
+    # close functions will never raise exception
     def close_main(self):
         if self.main_conn:
             self.main_conn.close()
+            self.main_conn = None
         self.states[H_MAIN] = S_IDLE
         
     def close_static(self):
         if self.static_conn:
             self.static_conn.close()
+            self.static_conn = None
         self.states[H_STATIC] = S_IDLE
         
     def close_status(self):
         if self.status_conn:
             self.status_conn.close()
+            self.status_conn = None
         self.states[H_STATUS] = S_IDLE
         
     def close(self):
@@ -235,6 +239,7 @@ class LOLAPI(object):
                 self._init_type(type)
             except Exception:
                 self._close_type(type)
+                raise InitializationFail('re-initializing after error failed', E_INITIALIZATION_FAIL)
             try:
                 raise err
             except http.Timeout as err:
@@ -699,7 +704,26 @@ class UnknownType(Error):
 class InitializationFail(Error):
     pass
 
+# tests
 if __name__ == '__main__':
+    import time 
+    api = LOLAPI()
+    api.init()
+    api.set_debug_mode(1)
+    begin = time.time()
+    
+    print '########## summoner info ##############'
+    while True:
+        try:
+            content = api.get_summoners_by_names(u'\uba38\ud53c93'.encode('utf8'))
+            print content[0]
+            content = content[1]
+        except Error as err:
+            print err
+        finally:
+            time.sleep(2)
+    
+if __name__ == '__maign__':
     api = LOLAPI()
     api.init()
     content = api.get_match_history(2576538, seasons='SEASON2015,SEASON2014')
@@ -707,7 +731,7 @@ if __name__ == '__main__':
     api.close()
     
 # tests
-if __name__ == '__main__':
+if __name__ == '__maign__':
     import time 
     api = LOLAPI()
     api.init()

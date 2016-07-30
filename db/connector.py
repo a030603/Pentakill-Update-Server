@@ -127,8 +127,8 @@ class DB(object):
     # Otherwise it raises Exception which contains error code and message of detail
     # Note : It is encouraged to use second usage for security. 
     #        First usage may suffer from malicious attack(e.g. SQL injection)
-    def query(self, arg1, arg2=None, multi=False, buffered=False):
-        buffered = buffered or self._buffered
+    def query(self, arg1, arg2=None, multi=False, buffered=None):
+        buffered = self._buffered if buffered == None else buffered 
         
         # whatever buffered or not, it must be in INIT state
         # buffered querying after non-buffered querying requires
