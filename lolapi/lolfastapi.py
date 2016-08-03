@@ -28,10 +28,15 @@
 # Otherwise, lolapi would have wrapped this module.
 
 from pentakill.lolapi import lolapi
+from pentakill.lolapi import config
 from pentakill.db import connector
-from pentakill.update import config
 import threading
 import time
+
+'''
+default API
+'''
+LOLAPI = lolapi.LOLAPI
 
 '''
 Work type
@@ -319,7 +324,7 @@ class LOLAdmin(object):
     def __init__(self, limit=None, key=None, cores=None, api=None):
         limit = config.LIMIT if limit == None else limit
         cores = config.CORE_NUM if cores == None else cores
-        api = config.API if api == None else api
+        api = LOLAPI if api == None else api
         self.api = api
         self.key = config.KEY if key == None else key
         self.req_num = limit[0]
@@ -811,7 +816,7 @@ class LOLCore(object):
             else:
                 status_code = status[0]
                 if status_code == config.SC_OK:
-                    # possibly, successful requests after rate exceed request
+                    # possibly, successful requests after rate exceed respond
                     # may be counted after rate reset. so it increases gap between here
                     # and server
                     if self.state.get_substate() == SS_SYNCHRONIZING:
@@ -1020,7 +1025,7 @@ class LOLFastAPI(object):
         
         self.get_mutex = threading.Lock()
         
-        self.keep_alive_on = False
+        self.keep_alive_on = config.KEEP_ALIVE_ON
         self.spec = self.admin.get_spec()
     
     # Commands master can give to servant
@@ -1082,12 +1087,13 @@ class LOLFastAPI(object):
                         if loop < 2:
                             loop += 1
                             tup = self.requests.popleft()
+                            first = True
+                            break                                
                         else:
                             loop = 0
                             if self.id == 0:
                                 self._check_status()
-                        first = True
-                        break                                 
+                            continue                        
                     except IndexError:
                         self.cond.release()
                         if self.state.start_event([LOLFastAPI.S_OK])[0]:
@@ -1266,7 +1272,7 @@ class FastResponse(object):
     def wait_response(self, timeout=None):
         ret = True
         self.cond.acquire()
-        if self.req_num == self.response_num:
+        if self.req_num <= self.response_num:
             self.cond.release()
             return ret
         self.cond.wait(timeout)
@@ -1278,9 +1284,13 @@ class FastResponse(object):
     # If responded, it will return tuple
     # If not responded, return None
     def get_response(self, name):
+        self.cond.acquire()
         if name in self.responses:
             self.responses[name][1] = False
-            return self.responses[name][0]
+            ret = self.responses[name][0]
+            self.cond.release()
+            return ret
+        self.cond.release()
         return None
     
     # returns next unread response
@@ -1302,7 +1312,7 @@ class FastResponse(object):
         self.cond.release()
         return result
         
-    
+# request is not thread safe
 class FastRequest(object):
     def __init__(self):
         # list of tuple (method, arg)
@@ -1433,6 +1443,7 @@ if __name__ == '__main__':
         res = API.get_multiple_data(req)
         while not res.wait_response(10):
             pass
+        count = 0
         for t in res:
             r = t[1]
             v = r[0]
@@ -1446,12 +1457,21 @@ if __name__ == '__main__':
                 status = 'SERVICE UNAVAILABLE'
             else:
                 status = 'UNKNOWN'
+            zero = True
             if v == 0:
                 for name in r[1][1]:
                     name = r[1][1][name]["name"]
-                print status, name
+                    zero = False
+                print status, r[1][0], name
+                
             else:
                 print status, r[1]
+                zero = False
+            if zero:
+                raise Exception("bug : can't see data")
+            count += 1
+        if count < 10:
+            raise Exception("bug : less than 10 response")
         import random
         time.sleep(random.random() * 5)
     API.close_multiple_get_mode()

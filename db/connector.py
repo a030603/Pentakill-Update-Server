@@ -211,11 +211,14 @@ class Cursor(object):
         return self.statement
         
     # fetch one row
+    # if no more row, returns None
     def fetchRow(self):
         if self.cursor:
             return self.cursor.fetchone()
     
     # fetch many rows, default is one
+    # returns list of rows
+    # if no more rows, returns empty list
     def fetchMany(self, size=1):
         return self.cursor.fetchmany(size)
     

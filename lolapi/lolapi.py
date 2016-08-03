@@ -14,7 +14,7 @@
 # after you do all the things, you must close the connection.
 
 from pentakill.lolapi import http
-from pentakill.lolapi.key import *
+from pentakill.lolapi.config import *
 import json
 
 '''
@@ -234,12 +234,10 @@ class LOLAPI(object):
                 
         except Exception as err:
             # re-initialize faulty connection
-            try:
-                self._close_type(type)
-                self._init_type(type)
-            except Exception:
-                self._close_type(type)
-                raise InitializationFail('re-initializing after error failed', E_INITIALIZATION_FAIL)
+            # it should never raise exception
+            self._close_type(type)
+            self._init_type(type)
+            
             try:
                 raise err
             except http.Timeout as err:
@@ -705,7 +703,7 @@ class InitializationFail(Error):
     pass
 
 # tests
-if __name__ == '__main__':
+if __name__ == '__maing__':
     import time 
     api = LOLAPI()
     api.init()
@@ -731,7 +729,7 @@ if __name__ == '__maign__':
     api.close()
     
 # tests
-if __name__ == '__maign__':
+if __name__ == '__main__':
     import time 
     api = LOLAPI()
     api.init()
@@ -739,11 +737,12 @@ if __name__ == '__maign__':
     begin = time.time()
     
     print '########## summoner info ##############'
-    content = api.get_summoners_by_names(u'\uba38\ud53c93'.encode('utf8'))
+    content = api.get_summoners_by_names(",".join((u'\uba38\ud53c93'.encode('utf8'),u'\uba38\ud53c94'.encode('utf8'))))
     print content[0]
     content = content[1]
     s_id = content[u'\uba38\ud53c93']['id']
-    print s_id
+    print content[u'\uba38\ud53c93']['id']
+    print content[u'\uba38\ud53c94']['id']
 
     print '########## summoner info ##############'
     content = api.get_summoners_by_ids(2576538)
