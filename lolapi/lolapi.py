@@ -576,7 +576,7 @@ class LOLAPI(object):
     # get summoner's stats for all types of game by summoner id
     # s_id : int or str representing summoenr id
     # season : season info
-    def get_rank_summary(self, s_id, season=None):
+    def get_stats_summary(self, s_id, season=None):
         season = season or self.season
         patharg = {'region':self.region,
                    'version':V_STATS,
