@@ -30,6 +30,7 @@
 from pentakill.lolapi import lolapi
 from pentakill.lolapi import config
 from pentakill.db import connector
+from pentakill.lib import servant
 import threading
 import time
 
@@ -1015,6 +1016,9 @@ class _ServiceUnavailablePolicy(object):
 # LOL API with fast multiple request object  
 # This provides functionality that one thread can send multiple request
 # at once.
+# Possible commands and arguments are
+# FCMD_DIE, argument is not used
+# FCMD_GET, arg is (fastResponse, tuple returned by fastRequest iterator)
 class LOLFastAPI(object):
     def __init__(self, servants=None, limit=None, key=None, cores=None, api=None):
         self.admin = LOLAdmin(limit, key, cores, api)
@@ -1032,36 +1036,18 @@ class LOLFastAPI(object):
     FCMD_DIE = 0    # stop routine and return
     FCMD_GET = 1    # get api data
     
-    # Servant state
+    # Servants state
     S_OK = 0        # OK
     S_SU = 1        # service unavailable
-    class _servant(threading.Thread):
+    class _servant(servant.Servant):
         def __init__(self, master, id):
-            threading.Thread.__init__(self)
+            servant.Servant.__init__(self)
             self.master = master
             self.admin = master.admin
             self.id = id
-            import collections
-            # object in request is form of (cmd, arg)
-            # 'cmd' is one of FCMD_* value
-            # 'arg' is variable wrt 'cmd' value
-            # FCMD_DIE, arg is not used
-            # FCMD_GET, (fastResponse, tuple returned by fastRequest iterator)
-            self.requests = collections.deque()
-            self.cond = threading.Condition()
             
             # servant is state machine
             self.state = self.master.state
-        
-        def run(self):
-            self.routine()
-            
-        # order request
-        def order(self, tup):
-            self.cond.acquire()
-            self.requests.append(tup)
-            self.cond.notify()
-            self.cond.release()
             
         # only number 0 servant is in charge of checking status
         def _check_status(self):
@@ -1344,6 +1330,7 @@ class FastRequest(object):
     #        to the method
     # beware that internal counter may conflict with name of request
     # added by add_request_name method, vice versa.
+    # the user should avoid such cases.
     def add_request(self, tuple):
         self.reqs[self.counter] = tuple
         self.counter += 1

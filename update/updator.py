@@ -19,6 +19,8 @@ from pentakill.lolapi import config
 from pentakill.db import connector
 from pentakill.db import error
 from pentakill.update import constant
+from pentakill.lib import servant
+import threading
 
 # Simple configuration
 T_WAIT = 10.0      # timeout for api data
@@ -26,19 +28,95 @@ T_WAIT = 10.0      # timeout for api data
 # Number of trial
 C_SUMMONER_TRY = 1
 
+# Number of background updator(servants)
+C_BG_UPDATOR_NUMBER = 2
+
 class UpdateModule(object):
     def __init__(self):
         self.api = lolfastapi.LOLFastAPI()
+        
+        self.bg_num = C_BG_UPDATOR_NUMBER
+        self.bg_next = 0
+        self.bgs = []
+        self.mutex = threading.Lock()
     
     def init(self):
         self.api.start_multiple_get_mode()
         self.api.set_keep_alive(True)
         
+        for i in range(self.bg_num):
+            bg = self._backgroundUpdator(self)
+            self.bgs.append(bg)
+            bg.daemon = True
+            bg.start()
+        
     def close(self):
         self.api.close_multiple_get_mode()
-
+        self.api = None
+        
+        for i in range(self.bg_num):
+            bg = self.bgs[i]
+            bg.order((self.CMD_EXIT, None))
+            
+        for i in range(self.bg_num):
+            bg = self.bgs[i]
+            bg.join(60)
+            
+        self.bgs = None
+        self.bg_num = 0
+        
+    # ####################################
+    #     Foreground Update Methods
+    # ####################################
     def getSummonerUpdator(self):
         return SummonerUpdator(self)
+    
+    def getRuneMasteryUpdator(self):
+        return RuneMasteryUpdator(self)
+    
+    # ####################################
+    #     Background Update Methods
+    # ####################################
+    def orderRuneMasteryUpdate(self, id):
+        self.mutex.acquire()
+        bg = self.bgs[self.bg_next]
+        self.bg_next += 1
+        self.bg_next %= self.bg_num
+        bg.order((self.CMD_RUNEMASTERY, id))
+        self.mutex.release()
+        
+    # background updator commands
+    CMD_EXIT = 0
+    CMD_RUNEMASTERY = 1
+    class _backgroundUpdator(servant.Servant):
+        def __init__(self, module):
+            servant.Servant.__init__(self)
+            self.module = module
+        
+        def routine(self):
+            while True:
+                self.cond.acquire()
+                while True:
+                    try:
+                        req = self.requests.popleft()
+                    except IndexError:
+                        self.cond.wait()
+                    else:
+                        break
+                self.cond.release()
+                
+                cmd = req[0]
+                if cmd == self.module.CMD_EXIT:
+                    return
+                elif cmd == self.module.CMD_RUNEMASTERY:
+                    id = req[1]
+                    try:
+                        updator = self.module.getRuneMasteryUpdator()
+                        updator.init()
+                        updator.put_data({'id':id})
+                        updator.update()
+                    except Exception:
+                        pass
     
 # Collection of functions frequently used
 class Utility(object):
@@ -254,7 +332,7 @@ class Updator(object):
     
 # Pentakill updator type
 class PentakillUpdator(Updator):
-    def __init__(self, module, trial=1):
+    def __init__(self, module, trial=C_SUMMONER_TRY):
         self.module = module
         self.api = module.api
         self.db = connector.PentakillDB()
@@ -309,8 +387,8 @@ class PentakillUpdator(Updator):
                     continue
             else:
                 try:
-                    #self.db.commit()
-                    self.db.rollback()
+                    self.db.commit()
+                    #self.db.rollback()
                 except error.Error as err:
                     raise DBError(str(err))
                 break
@@ -362,6 +440,7 @@ class SummonerUpdator(PentakillUpdator):
         PentakillUpdator.__init__(self, module, C_SUMMONER_TRY)
     
     def _update(self):
+        self.data['season'] = season = Util.season_int_convertor(config.SEASON)
         if 'id' in self.data:
             print 'id'
             self._get_api_data(summoner_by_id=True)
@@ -377,10 +456,32 @@ class SummonerUpdator(PentakillUpdator):
         self._update_stats()
         self._update_games()
         self._update_rank_champions()
-        self._update_runes()
-        self._update_masteries()
+        self.module.orderRuneMasteryUpdate(self.data['id'])
         return True
         
+    def _get_api_data(self, summoner_by_id=False):
+        id = self.data['id']
+        
+        reqs = lolfastapi.FastRequest()
+        if summoner_by_id:
+            reqs.add_request_name('summoner', (lolapi.LOLAPI.get_summoners_by_ids, (id,)))
+        reqs.add_request_name('leagues', (lolapi.LOLAPI.get_league_entries, (id,)))
+        reqs.add_request_name('games', (lolapi.LOLAPI.get_recent_games, (id,)))
+        reqs.add_request_name('stats', (lolapi.LOLAPI.get_stats_summary, (id,)))
+        reqs.add_request_name('rank', (lolapi.LOLAPI.get_rank_stats, (id,)))
+        
+        response = self.api.get_multiple_data(reqs)
+        self._wait_response(response)
+                
+        for name, res in response:
+            #print name, res
+            if self._check_response(res, notfound=False):
+                if name == 'summoner':
+                    #print res
+                    self.data[name] = res[1][1][str(id)]
+                else:
+                    self.data[name] = res[1][1]
+                    
     def _get_summoner_data_by_name(self):
         data = self.data
         name = Util.transform_names(data['name'])
@@ -408,13 +509,16 @@ class SummonerUpdator(PentakillUpdator):
             summonerLevel = apidat["summonerLevel"]
             revisionDate = int(apidat["revisionDate"] / 1000)
             
+            print name.decode('utf8').encode('cp949')
+            print (id, profileIconId, summonerLevel, revisionDate)            
+            
             result = self.db.query("select s_id, last_update "
                                    "from summoners where s_name_abbre = %s and live = 1", (nameAbbre,))
             row = result.fetchRow()
             result.close()
-            print row
+            #print row
             if row:
-                print row[1], revisionDate
+                #print row[1], revisionDate
                 self.data['epoch'] = row[1]
                 if row[0] != id:
                     # set current one to dead summoner
@@ -431,9 +535,6 @@ class SummonerUpdator(PentakillUpdator):
                     break
             else:
                 print "row not found"
-                print row
-            print name.decode('utf8').encode('cp949')
-            print (id, profileIconId, summonerLevel, revisionDate)
             
             # check if summoner name has been changed
             result = self.db.query("select s_name from summoners where s_id = %s", (id,))
@@ -463,31 +564,6 @@ class SummonerUpdator(PentakillUpdator):
         
         # data update
         self.data['id'] = id
-    
-    def _get_api_data(self, summoner_by_id=False):
-        id = self.data['id']
-        
-        reqs = lolfastapi.FastRequest()
-        if summoner_by_id:
-            reqs.add_request_name('summoner', (lolapi.LOLAPI.get_summoners_by_ids, (id,)))
-        reqs.add_request_name('leagues', (lolapi.LOLAPI.get_league_entries, (id,)))
-        reqs.add_request_name('games', (lolapi.LOLAPI.get_recent_games, (id,)))
-        reqs.add_request_name('stats', (lolapi.LOLAPI.get_stats_summary, (id,)))
-        reqs.add_request_name('rank', (lolapi.LOLAPI.get_rank_stats, (id,)))
-        reqs.add_request_name('runes', (lolapi.LOLAPI.get_summoner_runes, (id,)))
-        reqs.add_request_name('masteries', (lolapi.LOLAPI.get_summoner_masteries, (id,)))
-        
-        response = self.api.get_multiple_data(reqs)
-        self._wait_response(response)
-                
-        for name, res in response:
-            #print name, res
-            if self._check_response(res, notfound=False):
-                if name == 'summoner':
-                    #print res
-                    self.data[name] = res[1][1][str(id)]
-                else:
-                    self.data[name] = res[1][1]
                 
     def _update_leagues(self):
         id = self.data['id']
@@ -495,6 +571,29 @@ class SummonerUpdator(PentakillUpdator):
             return
         apidat = self.data['leagues'][str(id)]
         #print apidat
+        
+        query1 = ("insert into tier_transition (s_id, tier, division, lp, time) "
+                  "values (%s, %s, %s, %s, UNIX_TIMESTAMP(now()))")
+        # insert league data
+        query2 = ("insert into league (s_id, league_id, player_or_team_name, "
+                  "queue, name, tier, division, lp, is_fresh, is_inactive, is_veteran, "
+                  "is_hot_streak, is_in_mini_series, wins, losses, target) "
+                  "values (%s, %s , %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                  "on duplicate key update "
+                  "player_or_team_name = values(player_or_team_name),"
+                  "queue = values(queue),"
+                  "name = values(name),"
+                  "tier = values(tier),"
+                  "division = values(division),"
+                  "lp = values(lp),"
+                  "is_fresh = values(is_fresh),"
+                  "is_inactive = values(is_inactive),"
+                  "is_veteran = values(is_veteran),"
+                  "is_hot_streak = values(is_hot_streak),"
+                  "is_in_mini_series = values(is_in_mini_series),"
+                  "wins = values(wins),"
+                  "losses = values(losses),"
+                  "target = values(target)")        
         leagueId = 1
         for dic in apidat:
             queue = Util.league_queue_convertor(dic['queue'])
@@ -523,36 +622,13 @@ class SummonerUpdator(PentakillUpdator):
             
             # tier transition update
             if queue == constant.S_RANKED_SOLO_5x5:
-                query = ("insert into tier_transition (s_id, tier, division, lp, time) "
-                         "values (%s, %s, %s, %s, UNIX_TIMESTAMP(now()))")
-                
-                self.db.query(query, (id, tier, division, point)).close()
+                self.db.query(query1, (id, tier, division, point)).close()
             
-            # insert league data
-            query = ("insert into league (s_id, league_id, player_or_team_name, "
-	             "queue, name, tier, division, lp, is_fresh, is_inactive, is_veteran, "
-                     "is_hot_streak, is_in_mini_series, wins, losses, target) "
-                     "values (%s, %s , %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
-		     "on duplicate key update "
-		     "player_or_team_name = values(player_or_team_name),"
-		     "queue = values(queue),"
-		     "name = values(name),"
-		     "tier = values(tier),"
-		     "division = values(division),"
-		     "lp = values(lp),"
-		     "is_fresh = values(is_fresh),"
-		     "is_inactive = values(is_inactive),"
-		     "is_veteran = values(is_veteran),"
-		     "is_hot_streak = values(is_hot_streak),"
-		     "is_in_mini_series = values(is_in_mini_series),"
-		     "wins = values(wins),"
-		     "losses = values(losses),"
-		     "target = values(target)")
             arg = (id, leagueId, playerOrTeamName, queue, leagueName, tier, division,
                    point, fresh, inactive, veteran, hotStreak, isMiniSeries,
                    miniSeriesWins, miniSeriesLosses, miniSeriesTarget)
             
-            self.db.query(query, arg).close()
+            self.db.query(query2, arg).close()
             # increment league id
             leagueId += 1
             
@@ -569,21 +645,20 @@ class SummonerUpdator(PentakillUpdator):
         apidat = self.data['stats']
         #print apidat
         stats = apidat['playerStatSummaries']
+        season = self.data['season']
+        query = ("insert into stats (s_id, season, sub_type, win, lose) "
+                 "values (%s, %s, %s, %s, %s) "
+                 "on duplicate key update "
+                 "win = values(win),"
+                 "lose = values(lose)")   
         for stat in stats:
             modifyDate = int(stat['modifyDate'] / 1000)
             playerStatSummaryType = Util.player_stat_summary_type_convertor(
                 stat['playerStatSummaryType'])
             wins = stat['wins'] if 'wins' in stat else None
             losses = stat['losses'] if 'losses' in stat else None
-            season = Util.season_int_convertor(config.SEASON)
             
-            query = ("insert into stats (s_id, season, sub_type, win, lose) "
-                     "values (%s, %s, %s, %s, %s) "
-                     "on duplicate key update "
-                     "win = values(win),"
-                     "lose = values(lose)")
             arg = (id, season, playerStatSummaryType, wins, losses)
-            
             self.db.query(query, arg).close()      
 
     def _update_games(self):
@@ -592,6 +667,35 @@ class SummonerUpdator(PentakillUpdator):
             return
         apidat = self.data['games']
         #print apidat['games'][0]
+        season = self.data['season']
+        
+        query1 = ("insert into games (game_id, create_date, time_played, "
+                  "game_mode, game_type, sub_type) "
+                  "values (%s, %s, %s, %s, %s, %s) "
+                  "on duplicate key update "
+                  "game_id = values(game_id)")
+        ss = '%s, ' * 40
+        # Game detail update
+        query2 = ("insert into game_detail ( "
+                  "s_id, game_id, champion_id, team_id, ip_earned, is_win, "
+                  "spell1, spell2, level, item0, item1, item2, item3, item4, "
+                  "item5, item6, gold, minions_killed, neutral_killed_your_jungle, "
+                  "neutral_killed_enemy_jungle, kills, death, assist, "
+                  "physical_damage_to_champions, magic_damage_to_champions, "
+                  "true_damage_to_champions, total_damage_dealt, "
+                  "physical_damage_taken, magic_damage_taken, true_damage_taken, "
+                  "sightwards_bought, visionwards_bought, ward_placed, "
+                  "ward_killed, double_kills, triple_kills, quadra_kills, "
+                  "penta_kills, unreal_kills, season, lane, role) "
+                  "values ({0}null, null) "
+                  "on duplicate key update "
+                  "s_id = values(s_id), "
+                  "game_id = values(game_id)").format(*(ss,))
+        # Fellow update
+        query3 = ("insert into game_fellows values (%s, %s, %s, %s) "
+                  "on duplicate key update "
+                  "game_id = values(game_id),"
+                  "s_id = values(s_id)")
         for game in apidat['games']:
             stats = game['stats']
             fellows = game['fellowPlayers'] if 'fellowPlayers' in game else None
@@ -639,7 +743,6 @@ class SummonerUpdator(PentakillUpdator):
             unrealKills = stats['unrealKills'] if 'unrealKills' in stats else 0
             timePlayed = stats['timePlayed']
             win = stats['win']
-            season = Util.season_int_convertor(config.SEASON)
             
             # Games table update
             ##query = ("insert into games (game_id, create_date, time_played, "
@@ -650,31 +753,8 @@ class SummonerUpdator(PentakillUpdator):
                      ##"where not exists ( "
                      ##"select game_id from games where game_id = %s LIMIT 1)")
         
-            query = ("insert into games (game_id, create_date, time_played, "
-                     "game_mode, game_type, sub_type) "
-                     "values (%s, %s, %s, %s, %s, %s) "
-                     "on duplicate key update "
-                     "game_id = values(game_id)")
             args = (gameId, createDate, timePlayed, gameMode, gameType, subType)
-            self.db.query(query, args).close()
-            
-            ss = '%s, ' * 40
-            # Game detail update
-            query = ("insert into game_detail ( "
-                     "s_id, game_id, champion_id, team_id, ip_earned, is_win, "
-                     "spell1, spell2, level, item0, item1, item2, item3, item4, "
-                     "item5, item6, gold, minions_killed, neutral_killed_your_jungle, "
-                     "neutral_killed_enemy_jungle, kills, death, assist, "
-                     "physical_damage_to_champions, magic_damage_to_champions, "
-                     "true_damage_to_champions, total_damage_dealt, "
-                     "physical_damage_taken, magic_damage_taken, true_damage_taken, "
-                     "sightwards_bought, visionwards_bought, ward_placed, "
-                     "ward_killed, double_kills, triple_kills, quadra_kills, "
-                     "penta_kills, unreal_kills, season, lane, role) "
-                     "values ({0}null, null) "
-                     "on duplicate key update "
-                     "s_id = values(s_id), "
-                     "game_id = values(game_id)").format(*(ss,))
+            self.db.query(query1, args).close()
             
             args = (id, gameId, championId, teamId, ipEarned, win, spell1, spell2,
                     level, item0, item1, item2, item3, item4, item5, item6, gold,
@@ -687,15 +767,10 @@ class SummonerUpdator(PentakillUpdator):
                     pentaKills, unrealKills, season)
             
             #print query % args
-            self.db.query(query, args).close()
+            self.db.query(query2, args).close()
             
-            # Fellow update
-            query = ("insert into game_fellows values (%s, %s, %s, %s) "
-                     "on duplicate key update "
-                     "game_id = values(game_id),"
-                     "s_id = values(s_id)")
             args = (gameId, id, teamId, championId)
-            self.db.query(query, args).close()
+            self.db.query(query3, args).close()
             if fellows is None:
                 return
             for fellow in fellows:
@@ -703,7 +778,7 @@ class SummonerUpdator(PentakillUpdator):
                 fellowTeamId = fellow['teamId']
                 fellowChampionId = fellow['championId']
                 args = (gameId, fellowId, fellowTeamId, fellowChampionId)
-                self.db.query(query, args).close()
+                self.db.query(query3, args).close()
     
     def _update_rank_champions(self):
         id = self.data['id']
@@ -714,18 +789,174 @@ class SummonerUpdator(PentakillUpdator):
         modifyDate = apidat['modifyDate']
         if 'epoch' in self.data and self.data['epoch'] > modifyDate:
             return
+        
+        season = self.data['season']
+        ss = '%s, ' * 16 + "%s"
+        query = ("insert into rank_most_champions (s_id, champion_id, season, "
+                 "total_sessions_played, total_sessions_won, total_sessions_lost, "
+                 "total_champion_kills, total_deaths, total_assists, "
+                 "total_gold_earned, total_minion_kills, total_neutral_minions_killed, "
+                 "total_double_kills, total_triple_kills, total_quadra_kills, "
+                 "total_penta_kills, total_unreal_kills) "
+                 "values ({0}) "
+                 "on duplicate key update "
+                 "total_sessions_played = values(total_sessions_played),"
+                 "total_sessions_won = values(total_sessions_won),"
+                 "total_sessions_lost = values(total_sessions_lost),"
+                 "total_champion_kills = values(total_champion_kills),"
+                 "total_deaths = values(total_deaths),"
+                 "total_assists = values(total_assists),"
+                 "total_gold_earned = values(total_gold_earned),"
+                 "total_minion_kills = values(total_minion_kills),"
+                 "total_neutral_minions_killed = values(total_neutral_minions_killed),"
+                 "total_double_kills = values(total_double_kills),"
+                 "total_triple_kills = values(total_triple_kills),"
+                 "total_quadra_kills = values(total_quadra_kills),"
+                 "total_penta_kills = values(total_penta_kills),"
+                 "total_unreal_kills = values(total_unreal_kills)").format(*(ss,))        
         for champion in champions:
-            pass
+            stats = champion['stats']
+            championId = champion['id']
+            if championId < 1:
+                continue
+            
+            totalSessionsPlayed = stats['totalSessionsPlayed'] if 'totalSessionsPlayed' in stats else 0
+            totalSessionsWon = stats['totalSessionsWon'] if 'totalSessionsWon' in stats else 0
+            totalSessionsLost = stats['totalSessionsLost'] if 'totalSessionsLost' in stats else 0
+            totalChampionKills = stats['totalChampionKills'] if 'totalChampionKills' in stats else 0
+            totalDeathsPerSession = stats['totalDeathsPerSession'] if 'totalDeathsPerSession' in stats else 0
+            totalAssists = stats['totalAssists'] if 'totalAssists' in stats else 0
+            totalGoldEarned = stats['totalGoldEarned'] if 'totalGoldEarned' in stats else 0
+            totalMinionKills = stats['totalMinionKills'] if 'totalMinionKills' in stats else 0
+            totalNeutralMinionsKilled = stats['totalNeutralMinionsKilled'] if 'totalNeutralMinionsKilled' in stats else 0
+            totalDoubleKills = stats['totalDoubleKills'] if 'totalDoubleKills' in stats else 0
+            totalTripleKills = stats['totalTripleKills'] if 'totalTripleKills' in stats else 0
+            totalQuadraKills = stats['totalQuadraKills'] if 'totalQuadraKills' in stats else 0
+            totalPentaKills = stats['totalPentaKills'] if 'totalPentaKills' in stats else 0
+            totalUnrealKills = stats['totalUnrealKills'] if 'totalUnrealKills' in stats else 0
+            
+            args = (id, championId, season, totalSessionsPlayed, totalSessionsWon,
+                    totalSessionsLost, totalChampionKills, totalDeathsPerSession,
+                    totalAssists, totalGoldEarned, totalMinionKills,
+                    totalNeutralMinionsKilled, totalDoubleKills, totalTripleKills,
+                    totalQuadraKills, totalPentaKills, totalUnrealKills)
+            self.db.query(query, args).close()
     
+
+        
+class RuneMasteryUpdator(PentakillUpdator):
+    def __init__(self, module):
+        PentakillUpdator.__init__(self, module, C_SUMMONER_TRY)
+        
+    def _update(self):
+        self._get_api_data()
+        self._update_runes()
+        self._update_masteries()
+        #print 'rune mastery updata success'
+        return True
+        
+    def _get_api_data(self):
+        id = self.data['id']
+        
+        reqs = lolfastapi.FastRequest()
+        reqs.add_request_name('runes', (lolapi.LOLAPI.get_summoner_runes, (id,)))
+        reqs.add_request_name('masteries', (lolapi.LOLAPI.get_summoner_masteries, (id,)))
+        
+        response = self.api.get_multiple_data(reqs)
+        self._wait_response(response)
+                
+        for name, res in response:
+            #print name, res
+            if self._check_response(res, notfound=False):
+                self.data[name] = res[1][1]
+        
     def _update_runes(self):
-        pass
-    
+        id = self.data['id']
+        apidat = self.data['runes']
+        pages = apidat[str(id)]['pages']
+        pageNumber = 1
+        query1 = ("insert into runes (s_id, page_id, page_number, page_name, current) "
+                  "values (%s, %s, %s, %s, %s) "
+                  "on duplicate key update "
+                  "page_number = values(page_number), "
+                  "page_name = values(page_name), "
+                  "current = values(current)")
+        query2 = ("update rune_slots set rune_id = null where page_id = %s")
+        query3 = ("insert into rune_slots (page_id, slot_id, rune_id) "
+                  "values (%s, %s, %s) "
+                  "on duplicate key update "
+                  "rune_id = values(rune_id)")
+        query4 = ("delete from runes where s_id = %s and not find_in_set(page_id, %s)")
+        pids = []
+        for page in pages:
+            pageId = page['id']
+            name = page['name']
+            slots = page['slots'] if 'slots' in page else None
+            current = page['current']
+            
+            pids.append(pageId)
+            
+            args = (id, pageId, pageNumber, name, current)
+            self.db.query(query1, args).close()
+            pageNumber += 1
+            
+            self.db.query(query2, (pageId,)).close()
+            if not slots:
+                continue
+            for slot in slots:
+                runeId = slot['runeId']
+                slotId = slot['runeSlotId']
+                
+                args = (pageId, slotId, runeId)
+                self.db.query(query3, args).close()
+            
+        # Entries in mastery slots will be deleted automatically by foriegn key 
+        # cascading
+        #print str(pids)[1:-1]
+        self.db.query(query4, (id, str(pids)[1:-1].replace(' ', ''))).close()
+        
     def _update_masteries(self):
-        pass
-        
-        
-        
-        
+        id = self.data['id']
+        apidat = self.data['masteries']
+        pages = apidat[str(id)]['pages']
+        pageNumber = 1
+        query1 = ("insert into masteries (s_id, page_id, page_number, "
+                  "page_name, current) "
+                  "values (%s, %s, %s, %s, %s) "
+                  "on duplicate key update "
+                  "page_number = values(page_number),"
+                  "page_name = values(page_name),"
+                  "current = values(current)")
+        query2 = ("update mastery_slots set rank = 0 where page_id = %s")
+        query3 = ("insert into mastery_slots (page_id, mastery_id, rank) "
+                  "values (%s, %s, %s) "
+                  "on duplicate key update "
+                  "rank = values(rank)")
+        query4 = ("delete from masteries where s_id = %s and not find_in_set(page_id, %s)")
+        pids = []
+        for page in pages:
+            name = page['name']
+            pageId = page['id']
+            masteries = page['masteries'] if 'masteries' in page else None
+            current = page['current']
+            
+            pids.append(pageId)
+            
+            args = (id, pageId, pageNumber, name, current)
+            self.db.query(query1, args).close()
+            pageNumber += 1
+            
+            self.db.query(query2, (pageId,)).close()
+            if not masteries:
+                continue            
+            for mastery in masteries:
+                masteryId = mastery['id']
+                rank = mastery['rank']
+                
+                args = (pageId, masteryId, rank)
+                self.db.query(query3, args).close()
+                
+        self.db.query(query4, (id, str(pids)[1:-1].replace(' ', ''))).close()
     
 '''
 errno
@@ -789,13 +1020,17 @@ if __name__ == '__main__':
     import time
     module = UpdateModule()
     module.init()
-    for i in range(1):
+    data = [{'id':2576538}, {'name':'hide on bush'}]
+    
+    for i in range(2):
+        if i > 0:
+            time.sleep(10)        
         updator = module.getSummonerUpdator()
         updator.init()
-        updator.put_data({"name":' Hide on bush  '})
         #updator.put_data({"name":u'   \uba38 \ud53c   9  3'})
-        #updator.put_data({"id":2576538})
         #updator.put_data({"name":'zzz'})
+        #updator.put_data({"name":u' cj entus \ubbfc\uae30'})
+        updator.put_data(data[i])
         begin = time.time()
         updator.update()
         end = time.time()
