@@ -33,6 +33,7 @@ from pentakill.db import connector
 from pentakill.lib import servant
 import threading
 import time
+import copy
 
 '''
 default API
@@ -762,8 +763,10 @@ class LOLCore(object):
                 return False
             if self.left > 0:
                 self.left -= 1
+                #print 'get perm' + str(self)
                 return True
             else:
+                #print 'get perm fail' + str(self)
                 self.perm_condition.wait(self.admin.per_time)
             
     # Basic routine for retrieving data from lol api
@@ -786,6 +789,7 @@ class LOLCore(object):
             self.perm_condition.release()
             
             try:
+                #print 'method call'
                 result = method(self.api, *args)
                 self.global_after_req_mutex.acquire()
                 status = result[0]
@@ -843,7 +847,7 @@ class LOLCore(object):
                     # wait until synchronization is completed
                     self.req_condition.wait(self.per_time)
                     self.req_condition.release()
-                    
+                    #print 'start again'
                     # start again
                     continue
                 else:
@@ -1085,7 +1089,9 @@ class LOLFastAPI(object):
                         if self.state.start_event([LOLFastAPI.S_OK])[0]:
                             if not first and self.master.keep_alive_on:
                                 try:
+                                    print 'test data'
                                     self.admin.get_test_data()
+                                    print 'test data end'
                                 except Exception:
                                     pass
                             self.state.end_event()
@@ -1120,7 +1126,9 @@ class LOLFastAPI(object):
             if self.state.start_event([LOLFastAPI.S_OK])[0]:
                 do_end = True
                 try:
+                    #print '\nget data\n'
                     result = self.admin.get_data(method, args)
+                    #print '\n' + req_name +' get data end\n'
                 except TimeoutError as err:
                     res_tup = (FS_TIMEOUT, str(err))
                 except ServiceUnavailableError as err:
@@ -1201,13 +1209,17 @@ class FastResponse(object):
     def __init__(self, req_num):
         self.req_num = req_num
         self.response_num = 0
+        self.read_num = 0
         self.responses = {}
         self.cond = threading.Condition()
         
+        self.waits = []
+        
     class _iterator(object):
-        def __init__(self, responses, cond):
-            self.responses = responses
-            self.cond = cond
+        def __init__(self, response):
+            self.response = response
+            self.responses = self.response.responses
+            self.cond = self.response.cond
             self.cond.acquire()
             self.iter = self.responses.__iter__()
             
@@ -1218,6 +1230,7 @@ class FastResponse(object):
                     if not self.responses[name][1]:
                         continue
                     self.responses[name][1] = False
+                    self.response.read_num += 1
                     return (name, self.responses[name][0])
                 except StopIteration:
                     self.cond.release()
@@ -1234,9 +1247,11 @@ class FastResponse(object):
     # return iterator object for responses
     # it iterates through only non-read new responses
     def __iter__(self):
-        return self._iterator(self.responses, self.cond)
+        return self._iterator(self)
         
     # Add response
+    # If multiple responses with same name are added,
+    # only first response is added and the others are ignored.
     # If all requests are served, it notifies requester
     # name: name of request in request dictionary
     # tuple : tuple (status_code, data)
@@ -1244,11 +1259,25 @@ class FastResponse(object):
     #         'data' is returned data from API or error message
     def add_response(self, name, tuple):
         self.cond.acquire()
+        if name in self.responses:
+            self.cond.release()
+            return
         self.responses[name] = [tuple, True] # data, unread(True)
         self.response_num += 1
         # notify requestor
         if self.response_num >= self.req_num:
             self.cond.notifyAll()
+            
+        for wait in self.waits:
+            cond = wait[0]
+            found = True
+            if wait[1]:
+                if not name in wait[1]:
+                    found = False
+            if found:
+                cond.acquire()
+                cond.notify()
+                cond.release()
         self.cond.release()
         
     # Wait for responses
@@ -1257,22 +1286,98 @@ class FastResponse(object):
     # If all response is got, return True
     def wait_response(self, timeout=None):
         ret = True
+        first = True
+        left = timeout
         self.cond.acquire()
-        if self.req_num <= self.response_num:
-            self.cond.release()
-            return ret
-        self.cond.wait(timeout)
-        if self.req_num > self.response_num:
-            ret = False
+        while True:
+            if self.req_num <= self.response_num:
+                break
+            if first:
+                begin = time.time()
+                first = False
+            self.cond.wait(left)
+            end = time.time()
+            if left is not None:
+                elapsed = end - begin
+                left -= elapsed
+                if left <= 0:
+                    ret = False
+                    break
         self.cond.release()
         return ret
     
+    # If target reponses are responded and unread, returns response immediately
+    # If not, it waits until responded.
+    # If 'timeout' is specified and expires, raises TimeoutError exception
+    # If there can't be more unread response, returns None
+    # Target responses are specified in arguemtn 'list'.
+    # If 'list' is None, target response is any unread response
+    # If 'list' is not None, 'list' should contain strings of request name
+    # returned value is tuple (request name, response) if it's not None
+    def wait_target_response(self, list=None, timeout=None):
+        ret = None
+        first = True
+        left = timeout
+        to = False
+        list = copy.copy(list) if list else None
+        self.cond.acquire()
+        while True:
+            found = False
+            if list:
+                for name in list:
+                    try:
+                        res = self.responses[name]
+                    except KeyError:
+                        continue
+                    else:
+                        if res[1]:
+                            res[1] = False
+                            ret = (name, res[0])
+                            found = True
+                            break
+                if found:
+                    break
+            else:
+                for name in self.responses:
+                    if self.responses[name][1]:
+                        self.responses[name][1] = False
+                        ret = (name, self.responses[name][0])
+                        found = True
+                        break
+                if found:
+                    break
+            if self.req_num <= self.response_num:
+                break
+            if first:
+                begin = time.time()
+                first = False
+                cond = threading.Condition()
+                self.waits.append((cond, list))
+            cond.acquire()
+            self.cond.release()
+            cond.wait(left)
+            end = time.time()
+            cond.release()
+            self.cond.acquire()
+            if left is not None:
+                elapsed = end - begin
+                left -= elapsed
+                if left <= 0:
+                    ret = False
+                    to = True
+                    break
+        self.cond.release()
+        if to:
+            raise TimeoutError('response wait timeout')
+        return ret
+            
     # If responded, it will return tuple
     # If not responded, return None
     def get_response(self, name):
         self.cond.acquire()
         if name in self.responses:
             self.responses[name][1] = False
+            self.read_num += 1
             ret = self.responses[name][0]
             self.cond.release()
             return ret

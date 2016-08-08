@@ -101,7 +101,7 @@ LOLAdmin configuration
 '''
 Default number of core
 '''
-CORE_NUM = 10
+CORE_NUM = 5
 
 '''
 Status api and static api initialize

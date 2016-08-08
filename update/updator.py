@@ -23,7 +23,7 @@ from pentakill.lib import servant
 import threading
 
 # Simple configuration
-T_WAIT = 10.0      # timeout for api data
+T_WAIT = 122.0      # timeout for api data
 
 # Number of trial
 C_SUMMONER_TRY = 1
@@ -34,7 +34,7 @@ C_BG_UPDATOR_NUMBER = 2
 class UpdateModule(object):
     def __init__(self):
         self.api = lolfastapi.LOLFastAPI()
-        
+        self.api.set_debug(1)
         self.bg_num = C_BG_UPDATOR_NUMBER
         self.bg_next = 0
         self.bgs = []
@@ -73,6 +73,9 @@ class UpdateModule(object):
     
     def getRuneMasteryUpdator(self):
         return RuneMasteryUpdator(self)
+    
+    def getMatchUpdator(self):
+        return MatchUpdator(self)
     
     # ####################################
     #     Background Update Methods
@@ -360,11 +363,13 @@ class PentakillUpdator(Updator):
     # returns true for success, raise Error for failure
     def update(self):
         trial = 0
+        import traceback
         while True:
             try:
                 self.db.begin()
                 self._update()
             except (Error, error.Error, Exception) as err:
+                traceback.print_exc()
                 try:
                     raise err
                 except Error as err:
@@ -412,6 +417,14 @@ class PentakillUpdator(Updator):
         if not respond.wait_response(T_WAIT):
             raise APITimeout("Sever do not respond too long")
         
+    def _wait_target_response(self, respond, list):
+        try:
+            ret = respond.wait_target_response(list, T_WAIT)
+        except lolfastapi.TimeoutError:
+            raise APITimeout("Sever do not respond too long")
+        else:
+            return ret
+
     def _check_response(self, res, notfound=True):
         if res[0] == lolfastapi.FS_TIMEOUT:
             raise APITimeout("Sever do not respond too long")
@@ -442,6 +455,60 @@ class SummonerUpdator(PentakillUpdator):
     def _update(self):
         self.data['season'] = season = Util.season_int_convertor(config.SEASON)
         if 'id' in self.data:
+            id = self.data['id']
+            res = self._get_api_response(summoner_by_id=True)
+            ret = self._wait_target_response(res, ['summoner'])
+            self._check_response(ret[1])
+            name, dat = ret[0], ret[1][1][1]
+            self.data[name] = dat[str(id)]
+            self._update_summoner()
+        elif 'name' in self.data:
+            self._get_summoner_data_by_name()
+            self._update_summoner()
+            res = self._get_api_response()
+        else:
+            raise InvalidArgumentError("id or name must be given")
+        
+        target = ['leagues', 'stats', 'games', 'rank']
+        while True:
+            ret = self._wait_target_response(res, target)
+            if not ret:
+                break
+            name, dat = ret[0], ret[1][1][1]
+            if not self._check_response(ret[1], notfound=False):
+                continue
+            self.data[name] = dat
+            if name == 'leagues':
+                self._update_leagues()
+            elif name == 'stats':
+                self._update_stats()
+            elif name == 'games':
+                self._update_games()
+            elif name == 'rank':
+                self._update_rank_champions()
+            else:
+                raise UnknownError('unknown request name')
+                
+        self.module.orderRuneMasteryUpdate(self.data['id'])
+        return True
+    
+    def _get_api_response(self, summoner_by_id=False):
+        id = self.data['id']
+        
+        reqs = lolfastapi.FastRequest()
+        if summoner_by_id:
+            reqs.add_request_name('summoner', (lolapi.LOLAPI.get_summoners_by_ids, (id,)))        
+        reqs.add_request_name('leagues', (lolapi.LOLAPI.get_league_entries, (id,)))
+        reqs.add_request_name('games', (lolapi.LOLAPI.get_recent_games, (id,)))
+        reqs.add_request_name('stats', (lolapi.LOLAPI.get_stats_summary, (id,)))
+        reqs.add_request_name('rank', (lolapi.LOLAPI.get_rank_stats, (id,)))
+        
+        response = self.api.get_multiple_data(reqs)
+        return response
+    
+    def _old_update(self):
+        self.data['season'] = season = Util.season_int_convertor(config.SEASON)
+        if 'id' in self.data:
             print 'id'
             self._get_api_data(summoner_by_id=True)
             self._update_summoner()
@@ -458,7 +525,7 @@ class SummonerUpdator(PentakillUpdator):
         self._update_rank_champions()
         self.module.orderRuneMasteryUpdate(self.data['id'])
         return True
-        
+    
     def _get_api_data(self, summoner_by_id=False):
         id = self.data['id']
         
@@ -497,6 +564,21 @@ class SummonerUpdator(PentakillUpdator):
         self._check_response(res)
         #print res
         data['summoner'] = res[1][1][name.decode('utf8')]
+        
+    def _get_summoner_data_by_id(self):
+        data = self.data
+        id = data['id']
+        
+        reqs = lolfastapi.FastRequest()
+        reqs.add_request_name('summoner', (lolapi.LOLAPI.get_summoners_by_ids, (id,)))
+        
+        response = self.api.get_multiple_data(reqs)
+        self._wait_response(response)
+        res = response.get_response('summoner')
+        
+        self._check_response(res)
+        #print res
+        data['summoner'] = res[1][1][str(id)]
         
     def _update_summoner(self):
         while True:
@@ -958,6 +1040,14 @@ class RuneMasteryUpdator(PentakillUpdator):
                 
         self.db.query(query4, (id, str(pids)[1:-1].replace(' ', ''))).close()
     
+    
+class MatchUpdator(PentakillUpdator):
+    def __init__(self, module):
+        PentakillUpdator.__init__(self, module, C_SUMMONER_TRY)
+        
+    def _update(self):
+        return True
+    
 '''
 errno
 '''
@@ -1020,7 +1110,7 @@ if __name__ == '__main__':
     import time
     module = UpdateModule()
     module.init()
-    data = [{'id':2576538}, {'name':'hide on bush'}]
+    data = [{'id':2060159}, {'name':'hide on bush', 'id':4460427}]
     
     for i in range(2):
         if i > 0:
