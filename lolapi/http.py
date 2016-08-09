@@ -913,7 +913,7 @@ if __name__ == '__2main__':
 if __name__ == '__m2ain__':
     #test codes
     
-    con = HTTP('127.0.0.1', 999, 2)
+    con = HTTP('127.0.0.1', 999, timeout=2)
     con.debugMode(1)
     con.setRequest('GET', '/pentakill/search.php?name=CJ%20Entus%20%EC%9A%B0%EC%A3%BC')
     con.putHeader('Host', '127.0.0.1')
@@ -933,6 +933,34 @@ if __name__ == '__m2ain__':
             print 'read', i+1, 'st'
 
         print content  
+        msg.close()
+    except Timeout as err:
+        print err
+    end = time.time()
+    print end-begin, 'sec taken for reading'
+
+if __name__ == '__main__':
+    #test codes
+    
+    HOST = 'ddragon.leagueoflegends.com'
+    PORT = 80
+    TIMEOUT = 2
+    PATH = '/cdn/6.16.2/img/item/3078.png'
+    con = HTTP(HOST, PORT, timeout=TIMEOUT)
+    con.debugMode(1)
+    con.setRequest('GET', PATH)
+    con.putHeader('Host', HOST)
+    con.putHeader('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8')
+    con.putHeader('Accept-Encoding', 'identity')
+    con.sendRequest()
+    
+    begin = time.time()
+    try:
+        msg = con.getResponse()
+        #print msg.getStatus()
+        #print msg.headers 
+        content = msg.read()
+        print content
         msg.close()
     except Timeout as err:
         print err

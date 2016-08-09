@@ -1089,9 +1089,9 @@ class LOLFastAPI(object):
                         if self.state.start_event([LOLFastAPI.S_OK])[0]:
                             if not first and self.master.keep_alive_on:
                                 try:
-                                    print 'test data'
+                                    #print 'test data'
                                     self.admin.get_test_data()
-                                    print 'test data end'
+                                    #print 'test data end'
                                 except Exception:
                                     pass
                             self.state.end_event()
@@ -1351,13 +1351,13 @@ class FastResponse(object):
             if first:
                 begin = time.time()
                 first = False
-                cond = threading.Condition()
-                self.waits.append((cond, list))
-            cond.acquire()
+                wait = threading.Condition()
+                self.waits.append((wait, list))
+            wait.acquire()
             self.cond.release()
-            cond.wait(left)
+            wait.wait(left)
             end = time.time()
-            cond.release()
+            wait.release()
             self.cond.acquire()
             if left is not None:
                 elapsed = end - begin

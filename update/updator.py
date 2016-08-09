@@ -23,7 +23,7 @@ from pentakill.lib import servant
 import threading
 
 # Simple configuration
-T_WAIT = 122.0      # timeout for api data
+T_WAIT = 22.0      # timeout for api data
 
 # Number of trial
 C_SUMMONER_TRY = 1
@@ -293,6 +293,87 @@ class Utility(object):
         print type
         raise TypeConvertError("player stat summary type conversion fail")
     
+    def queue_type_convertor(self, type):
+        if type == 'CUSTOM':
+            return constant.QT_CUSTOM
+        if type == 'NORMAL_3x3':
+            return constant.QT_NORMAL_3x3
+        if type == 'NORMAL_5x5_BLIND':
+            return constant.QT_NORMAL_5x5_BLIND
+        if type == 'NORMAL_5x5_DRAFT':
+            return constant.QT_NORMAL_5x5_DRAFT
+        if type == 'RANKED_SOLO_5x5':
+            return constant.QT_RANKED_SOLO_5x5
+        if type == 'RANKED_PREMADE_5x5':
+            return constant.QT_RANKED_PREMADE_5x5
+        if type == 'RANKED_PREMADE_3x3':
+            return constant.QT_RANKED_PREMADE_3x3
+        if type == 'RANKED_TEAM_3x3':
+            return constant.QT_RANKED_TEAM_3x3
+        if type == 'RANKED_TEAM_5x5':
+            return constant.QT_RANKED_TEAM_5x5
+        if type == 'ODIN_5x5_BLIND':
+            return constant.QT_ODIN_5x5_BLIND
+        if type == 'ODIN_5x5_DRAFT':
+            return constant.QT_ODIN_5x5_DRAFT
+        if type == 'BOT_5x5':
+            return constant.QT_BOT_5x5
+        if type == 'BOT_ODIN_5x5':
+            return constant.QT_BOT_ODIN_5x5
+        if type == 'BOT_5x5_INTRO':
+            return constant.QT_BOT_5x5_INTRO
+        if type == 'BOT_5x5_BEGINNER':
+            return constant.QT_BOT_5x5_BEGINNER
+        if type == 'BOT_5x5_INTERMEDIATE':
+            return constant.QT_BOT_5x5_INTERMEDIATE
+        if type == 'BOT_TT_3x3':
+            return constant.QT_BOT_TT_3x3
+        if type == 'GROUP_FINDER_5x5':
+            return constant.QT_GROUP_FINDER_5x5
+        if type == 'ARAM_5x5':
+            return constant.QT_ARAM_5x5
+        if type == 'ONEFORALL_5x5':
+            return constant.QT_ONEFORALL_5x5
+        if type == 'FIRSTBLOOD_1x1':
+            return constant.QT_FIRSTBLOOD_1x1
+        if type == 'FIRSTBLOOD_2x2':
+            return constant.QT_FIRSTBLOOD_2x2
+        if type == 'SR_6x6':
+            return constant.QT_SR_6x6
+        if type == 'URF_5x5':
+            return constant.QT_URF_5x5
+        if type == 'ONEFORALL_MIRRORMODE_5x5':
+            return constant.QT_ONEFORALL_MIRRORMODE_5x5
+        if type == 'BOT_URF_5x5':
+            return constant.QT_BOT_URF_5x5
+        if type == 'NIGHTMARE_BOT_5x5_RANK1':
+            return constant.QT_NIGHTMARE_BOT_5x5_RANK1
+        if type == 'NIGHTMARE_BOT_5x5_RANK2':
+            return constant.QT_NIGHTMARE_BOT_5x5_RANK2
+        if type == 'NIGHTMARE_BOT_5x5_RANK5':
+            return constant.QT_NIGHTMARE_BOT_5x5_RANK5
+        if type == 'ASCENSION_5x5':
+            return constant.QT_ASCENSION_5x5
+        if type == 'HEXAKILL':
+            return constant.QT_HEXAKILL
+        if type == 'BILGEWATER_ARAM_5x5':
+            return constant.QT_BILGEWATER_ARAM_5x5
+        if type == 'KING_PORO_5x5':
+            return constant.QT_KING_PORO_5x5
+        if type == 'COUNTER_PICK':
+            return constant.QT_COUNTER_PICK
+        if type == 'BILGEWATER_5x5':
+            return constant.QT_BILGEWATER_5x5
+        if type == 'SIEGE':
+            return constant.QT_SIEGE
+        if type == 'DEFINITELY_NOT_DOMINION_5x5':
+            return constant.QT_DEFINITELY_NOT_DOMINION_5x5
+        if type == 'TEAM_BUILDER_DRAFT_UNRANKED_5x5':
+            return constant.QT_TEAM_BUILDER_DRAFT_UNRANKED_5x5
+        if type == 'TEAM_BUILDER_DRAFT_RANKED_5x5':
+            return constant.QT_TEAM_BUILDER_DRAFT_RANKED_5x5
+        
+        raise TypeConvertError("queue type conversion fail")
     def season_int_convertor(self, season):
         if season == constant.SEASON2013:
             return 3
@@ -316,6 +397,119 @@ class Utility(object):
             return constant.SEASON2016
         
         raise TypeConvertError("int season conversion fail")
+    
+    def event_type_convertor(self, type):
+        if type == 'BUILDING_KILL':
+            return constant.ET_BUILDING_KILL
+        if type == 'CHAMPION_KILL':
+            return constant.ET_CHAMPION_KILL
+        if type == 'ELITE_MONSTER_KILL':
+            return constant.ET_ELITE_MONSTER_KILL
+        if type == 'WARD_KILL':
+            return constant.ET_WARD_KILL
+        if type == 'WARD_PLACED':
+            return constant.ET_WARD_PLACED
+        if type == 'ITEM_DESTROYED':
+            return constant.ET_ITEM_DESTROYED
+        if type == 'ITEM_PURCHASED':
+            return constant.ET_ITEM_PURCHASED
+        if type == 'ITEM_SOLD':
+            return constant.ET_ITEM_SOLD
+        if type == 'ITEM_UNDO':
+            return constant.ET_ITEM_UNDO
+        if type == 'SKILL_LEVEL_UP':
+            return constant.ET_SKILL_LEVEL_UP
+        
+        raise TypeConvertError("event type conversion fail")
+        
+    def building_type_convertor(self, type):
+        if type == 'TOWER_BUILDING':
+            return constant.BT_TOWER_BUILDING
+        if type == 'INHIBITOR_BUILDING':
+            return constant.BT_INHIBITOR_BUILDING
+        
+        raise TypeConvertError("building type conversion fail")
+    
+    
+    def tower_type_convertor(self, type):
+        if type == 'OUTER_TURRET':
+            return constant.TT_OUTER_TURRET
+        if type == 'INNER_TURRET':
+            return constant.TT_INNER_TURRET
+        if type == 'BASE_TURRET':
+            return constant.TT_BASE_TURRET
+        if type == 'NEXUS_TURRET':
+            return constant.TT_NEXUS_TURRET
+        if type == 'UNDEFINED_TURRET':
+            return constant.TT_UNDEFINED_TURRET
+        
+        raise TypeConvertError("tower type conversion fail")
+    
+    def lane_type_convertor(self, type):
+        if type == 'TOP_LANE':
+            return constant.LT_TOP_LANE
+        if type == 'MID_LANE':
+            return constant.LT_MID_LANE
+        if type == 'BOT_LANE':
+            return constant.LT_BOT_LANE
+        
+        raise TypeConvertError("lane type conversion fail")
+    
+    def monster_type_convertor(self, type):
+        if type == 'BLUE_GOLEM':
+            return constant.MT_BLUE_GOLEM
+        if type == 'RED_LIZARD':
+            return constant.MT_RED_LIZARD
+        if type == 'DRAGON':
+            return constant.MT_DRAGON
+        if type == 'BARON_NASHOR':
+            return constant.MT_BARON_NASHOR
+        if type == 'VILEMAW':
+            return constant.MT_VILEMAW
+        
+        raise TypeConvertError("monster type conversion fail")
+    
+    def ward_type_convertor(self, type):
+        if type == 'SIGHT_WARD':
+            return constant.WT_SIGHT_WARD
+        if type == 'VISION_WARD':
+            return constant.WT_VISION_WARD
+        if type == 'YELLOW_TRINKET':
+            return constant.WT_YELLOW_TRINKET
+        if type == 'YELLOW_TRINKET_UPGRADE':
+            return constant.WT_YELLOW_TRINKET_UPGRADE
+        if type == 'TEEMO_MUSHROOM':
+            return constant.WT_TEEMO_MUSHROOM
+        if type == 'UNDEFINED':
+            return constant.WT_UNDEFINED
+        
+        raise TypeConvertError("ward type conversion fail")
+    
+    def lane_convertor(self, type):
+        if type == 'TOP':
+            return constant.L_TOP
+        if type == 'JUNGLE':
+            return constant.L_JUNGLE
+        if type == 'MIDDLE':
+            return constant.L_MIDDLE
+        if type == 'BOTTOM':
+            return constant.L_BOTTOM
+        
+        raise TypeConvertError("lane conversion fail")
+    
+    def role_convertor(self, type):
+        if type == 'DUO':
+            return constant.R_DUO
+        if type == 'NONE':
+            return constant.R_NONE
+        if type == 'SOLO':
+            return constant.R_SOLO
+        if type == 'DUO_CARRY':
+            return constant.R_DUO_CARRY
+        if type == 'DUO_SUPPORT':
+            return constant.R_DUO_SUPPORT
+        
+        raise TypeConvertError("role conversion fail")
     
 Util = Utility()
 
@@ -341,6 +535,8 @@ class PentakillUpdator(Updator):
         self.db = connector.PentakillDB()
         self.trial = trial
         self.data = {}
+        
+        self.debug = False
         
     def init(self):
         try:
@@ -392,8 +588,11 @@ class PentakillUpdator(Updator):
                     continue
             else:
                 try:
-                    self.db.commit()
-                    #self.db.rollback()
+                    if not self.debug:
+                        self.db.commit()
+                    else:
+                        print 'debug : rollback'
+                        self.db.rollback()
                 except error.Error as err:
                     raise DBError(str(err))
                 break
@@ -440,6 +639,11 @@ class PentakillUpdator(Updator):
             raise APIError("Bad status code")
             
         return sc == config.SC_OK
+    
+    # level is boolean. If True, enable debug mode
+    # In debug mode, update is not committed
+    def set_debug(self, level=True):
+        self.debug = level
         
 # Update summoner data by id or name
 # data dictionary must contain "id" or "name" key
@@ -925,7 +1129,7 @@ class SummonerUpdator(PentakillUpdator):
             self.db.query(query, args).close()
     
 
-        
+# id : summoner id
 class RuneMasteryUpdator(PentakillUpdator):
     def __init__(self, module):
         PentakillUpdator.__init__(self, module, C_SUMMONER_TRY)
@@ -1040,13 +1244,66 @@ class RuneMasteryUpdator(PentakillUpdator):
                 
         self.db.query(query4, (id, str(pids)[1:-1].replace(' ', ''))).close()
     
-    
+# id : match id
 class MatchUpdator(PentakillUpdator):
     def __init__(self, module):
         PentakillUpdator.__init__(self, module, C_SUMMONER_TRY)
         
     def _update(self):
+        self._get_match_data()
+        if not self._validate_match():
+            raise UnsupportedMatchError('unsupported queue type')
+        
+        
         return True
+    
+    def _get_match_data(self):
+        id = self.data['id']
+        
+        reqs = lolfastapi.FastRequest()
+        reqs.add_request_name('match', (lolapi.LOLAPI.get_match, (id,)))
+        
+        response = self.api.get_multiple_data(reqs)
+        self._wait_response(response)
+                
+        for name, res in response:
+            #print name, res
+            if self._check_response(res, notfound=False):
+                self.data[name] = res[1][1]
+                
+    def _validate_match(self):
+        apidat = self.data['match']
+        queueType = apidat['queueType']
+        queue = ([constant.QT_NORMAL_3x3,
+                  constant.QT_NORMAL_5x5_BLIND,
+                  constant.QT_NORMAL_5x5_DRAFT,
+                  constant.QT_RANKED_SOLO_5x5,
+                  constant.QT_RANKED_TEAM_3x3,
+                  constant.QT_RANKED_TEAM_5x5,
+                  constant.QT_BOT_5x5_INTRO,
+                  constant.QT_BOT_5x5_BEGINNER,
+                  constant.QT_BOT_5x5_INTERMEDIATE,
+                  constant.QT_ARAM_5x5,
+                  constant.QT_URF_5x5,
+                  constant.QT_TEAM_BUILDER_DRAFT_UNRANKED_5x5,
+                  constant.QT_TEAM_BUILDER_DRAFT_RANKED_5x5,])
+        
+        if type in queue:
+            return True
+        else:
+            return False
+        
+    def _update_participants(self):
+        apidata = self.data['match']
+        
+    def _update_teams(self):
+        apidata = self.data['match']
+
+    def _update_events(self):
+        apidata = self.data['match']
+        
+    def _update_participant_frames(self):
+            apidata = self.data['match']
     
 '''
 errno
@@ -1060,6 +1317,8 @@ E_API_ERROR = 5                 # API Error
 E_API_TIMEOUT = 6               # API Error (timeout)
 E_API_UNAVAILABLE = 7           # API problem (config or api server)
 E_TYPE_CONVERT_ERROR = 8
+E_COOLDOWN_TIME_ERROR = 9       # Wait time for next update remaining
+E_UNSUPPORTED_MATCH_ERROR = 10  # Unsupported match type
     
 class Error(Exception):
     def __init__(self, msg, errno=None):
@@ -1105,14 +1364,44 @@ class TypeConvertError(Error):
     def __init__(self, msg):
         Error.__init__(self, msg, E_TYPE_CONVERT_ERROR)
         
+class CoolTimeError(Error):
+    def __init__(self, msg):
+        Error.__init__(self, msg, E_COOLDOWN_TIME_ERROR)
+       
+class UnsupportedMatchError(Error):
+    def __init__(self, msg):
+        Error.__init__(self, msg, E_UNSUPPORTED_MATCH_ERROR)
+
+       
 if __name__ == '__main__':
-    print 'test update'
     import time
     module = UpdateModule()
-    module.init()
+    module.init() 
+if __name__ == '__main__':
+    print 'test match update'
+    data = [{'id':2526543207}]
+    
+    for i in range(len(data)):
+        if i > 0:
+            time.sleep(10)        
+        updator = module.getMatchUpdator()
+        updator.init()
+        updator.set_debug(True)
+        #updator.put_data({"name":u'   \uba38 \ud53c   9  3'})
+        #updator.put_data({"name":'zzz'})
+        #updator.put_data({"name":u' cj entus \ubbfc\uae30'})
+        updator.put_data(data[i])
+        begin = time.time()
+        updator.update()
+        end = time.time()
+        print end - begin, 'sec elapsed'
+    print 'test passed'
+    
+if __name__ == '__main__':
+    print 'test summoner update'
     data = [{'id':2060159}, {'name':'hide on bush', 'id':4460427}]
     
-    for i in range(2):
+    for i in range(len(data)):
         if i > 0:
             time.sleep(10)        
         updator = module.getSummonerUpdator()
@@ -1125,5 +1414,7 @@ if __name__ == '__main__':
         updator.update()
         end = time.time()
         print end - begin, 'sec elapsed'
-    module.close()
     print 'test passed'
+
+if __name__ == '__main__':
+    module.close()
