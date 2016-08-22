@@ -19,26 +19,40 @@ from pentakill.lolapi import config
 from pentakill.db import connector
 from pentakill.db import error
 from pentakill.update import constant
+from pentakill.update import util
 from pentakill.lib import servant
-import threading
+from pentakill.lib import progress_note
+import threading, traceback
 
 # Simple configuration
 T_WAIT = 22.0      # timeout for api data
 
 # Number of trial
 C_SUMMONER_TRY = 1
+C_RUNE_MASTERY_TRY = 1
+C_MATCH_TRY = 1
+C_CURRENT_GAME_TRY = 1
+
+# Summoner update cooltime, in seconds
+C_SUMMONER_UPDATE_RENEW_INTERVAL = 60.0
+
+# Current game data refresh interval, in seconds
+C_CURRENT_GAME_REFRESH_INTERVAL = 60.0
 
 # Number of background updator(servants)
-C_BG_UPDATOR_NUMBER = 2
+C_BG_UPDATOR_NUMBER = 5
+
+Util = util.Utility()
 
 class UpdateModule(object):
     def __init__(self):
         self.api = lolfastapi.LOLFastAPI()
-        self.api.set_debug(1)
+        #self.api.set_debug(1)
         self.bg_num = C_BG_UPDATOR_NUMBER
         self.bg_next = 0
         self.bgs = []
         self.mutex = threading.Lock()
+        self.policy = PentakillUpdatePolicy(self)
     
     def init(self):
         self.api.start_multiple_get_mode()
@@ -65,6 +79,9 @@ class UpdateModule(object):
         self.bgs = None
         self.bg_num = 0
         
+    def getPolicy(self):
+        return self.policy
+    
     # ####################################
     #     Foreground Update Methods
     # ####################################
@@ -80,17 +97,24 @@ class UpdateModule(object):
     # ####################################
     #     Background Update Methods
     # ####################################
+    def orderUpdate(self, updator):
+        self._orderBgUpdator((self.CMD_UPDATE, updator))
+        
     def orderRuneMasteryUpdate(self, id):
+        self._orderBgUpdator((self.CMD_RUNEMASTERY, id))
+        
+    def _orderBgUpdator(self, arg):
         self.mutex.acquire()
         bg = self.bgs[self.bg_next]
         self.bg_next += 1
         self.bg_next %= self.bg_num
-        bg.order((self.CMD_RUNEMASTERY, id))
+        bg.order(arg)
         self.mutex.release()
         
     # background updator commands
     CMD_EXIT = 0
     CMD_RUNEMASTERY = 1
+    CMD_UPDATE = 2
     class _backgroundUpdator(servant.Servant):
         def __init__(self, module):
             servant.Servant.__init__(self)
@@ -108,410 +132,77 @@ class UpdateModule(object):
                         break
                 self.cond.release()
                 
-                cmd = req[0]
-                if cmd == self.module.CMD_EXIT:
-                    return
-                elif cmd == self.module.CMD_RUNEMASTERY:
-                    id = req[1]
-                    try:
+                updator = None
+                try:
+                    cmd = req[0]
+                    if cmd == self.module.CMD_EXIT:
+                        return
+                    elif cmd == self.module.CMD_RUNEMASTERY:
+                        id = req[1]
                         updator = self.module.getRuneMasteryUpdator()
                         updator.init()
                         updator.put_data({'id':id})
                         updator.update()
-                    except Exception:
-                        pass
-    
-# Collection of functions frequently used
-class Utility(object):
-    # Transfrom unicode string of summoner names
-    def transform_names(self, names):
-        return names.lower().replace(" ", "").encode('utf8')
-    
-    # Get abbrevation names
-    def abbre_names(self, names):
-        return names.replace(" ", "")
-    
-    def league_queue_convertor(self, type):
-        if type == 'RANKED_SOLO_5x5':
-            return constant.S_RANKED_SOLO_5x5
-        elif type == 'RANKED_TEAM_3x3':
-            return constant.S_RANKED_TEAM_3x3 
-        elif type == 'RANKED_TEAM_5x5':
-            return constant.S_RANKED_TEAM_5x5
+                    elif cmd == self.module.CMD_UPDATE:
+                        updator = req[1]
+                        updator.update()
+                    else:
+                        continue
+                except Exception:
+                    #traceback.print_exc()
+                    pass
+                finally:
+                    if updator:
+                        updator.close()
+                        updator = None
+
+class PentakillUpdatePolicy(object):
+    def __init__(self, module):
+        self.module = module
         
-        raise TypeConvertError("league queue conversion fail")
+    def _get_db(self):
+        db = connector.PentakillDB()
+        db.init()
+        db.begin()
+        return db
     
-    def league_division_convertor(self, division):
-        if division == 'I':
-            return 1
-        elif division == 'II':
-            return 2
-        elif division == 'III':
-            return 3
-        elif division == 'IV':
-            return 4
-        elif division == 'V':
-            return 5
+    def check_summoner_update(self, id=None, name=None):
+        db = self._get_db()
+        query = ("select last_update, unix_timestamp(now()) "
+                 "from summoners {0}")
+        where1 = ("where s_id = %s")
+        where2 = ("where s_name_abbre = %s")
+        if id:
+            result = db.query(query.format(*(where1,)), (id,))
+        elif name:
+            name = Util.transform_names(name)
+            result = db.query(query.format(*(where2,)), (name,))
+        else:
+            raise InvalidArgumentError('id or name must be given')
         
-        raise TypeConvertError("division conversion fail")
+        row = result.fetchRow()
+        result.close()
+        if row:
+            last_update, cur = row
+            left = C_SUMMONER_UPDATE_RENEW_INTERVAL - cur + last_update
+            left = left if left > 0 else 0
+            if left > 0:
+                return (False, left, db)
+            else:
+                return (True, left, db)
+        return (True, None, db)
+        
+# Updator's initialize and finalize functions
+class UpdatorInitFinal(object):
+    def init(self, updator):
+        self.updator = updator
+        self.data = self.updator.get_data()
     
-    def game_mode_convertor(self, mode):
-        if mode == 'CLASSIC':
-            return constant.M_CLASSIC
-        elif mode == 'ODIN':
-            return constant.M_ODIN
-        elif mode == 'ARAM':
-            return constant.M_ARAM
-        elif mode == 'TUTORIAL':
-            return constant.M_TUTORIAL
-        elif mode == 'ONEFORALL':
-            return constant.M_ONEFORALL
-        elif mode == 'FIRSTBLOOD':
-            return constant.M_FIRSTBLOOD
-        elif mode == 'ASCENSION':
-            return constant.M_ASCENSION
-        elif mode == 'KINGPORO':
-            return constant.M_KINGPORO
-        elif mode == 'SIEGE':
-            return constant.M_SIEGE
-        
-        raise TypeConvertError("game mode conversion fail")
+    def initialize(self):
+        pass
     
-    def game_type_convertor(self, type):
-        if type == 'CUSTOM_GAME':
-            return constant.T_CUSTOM_GAME
-        elif type == 'TUTORIAL_GAME':
-            return constant.T_TUTORIAL_GAME
-        elif type == 'MATCHED_GAME':
-            return constant.T_MATCHED_GAME
-        
-        raise TypeConvertError("game type conversion fail")
-    
-    def subtype_convertor(self, subtype):
-        if subtype == 'NONE':
-            return constant.S_NONE
-        elif subtype == 'NORMAL':
-            return constant.S_NORMAL
-        elif subtype == 'NORMAL_3x3':
-            return constant.S_NORMAL_3x3
-        elif subtype == 'ODIN_UNRANKED':
-            return constant.S_ODIN_UNRANKED
-        elif subtype == 'ARAM_UNRANKED_5x5':
-            return constant.S_ARAM_UNRANKED_5x5
-        elif subtype == 'BOT':
-            return constant.S_BOT
-        elif subtype == 'BOT_3x3':
-            return constant.S_BOT_3x3
-        elif subtype == 'RANKED_SOLO_5x5':
-            return constant.S_RANKED_SOLO_5x5
-        elif subtype == 'RANKED_TEAM_3x3':
-            return constant.S_RANKED_TEAM_3x3
-        elif subtype == 'RANKED_TEAM_5x5':
-            return constant.S_RANKED_TEAM_5x5
-        elif subtype == 'ONEFORALL_5x5':
-            return constant.S_ONEFORALL_5x5
-        elif subtype == 'FIRSTBLOOD_1x1':
-            return constant.S_FIRSTBLOOD_1x1
-        elif subtype == 'FIRSTBLOOD_2x2':
-            return constant.S_FIRSTBLOOD_2x2
-        elif subtype == 'SR_6x6':
-            return constant.S_SR_6x6
-        elif subtype == 'CAP_5x5':
-            return constant.S_CAP_5x5
-        elif subtype == 'URF':
-            return constant.S_URF
-        elif subtype == 'URF_BOT':
-            return constant.S_URF_BOT
-        elif subtype == 'NIGHTMARE_BOT':
-            return constant.S_NIGHTMARE_BOT
-        elif subtype == 'ASCENSION':
-            return constant.S_ASCENSION
-        elif subtype == 'HEXAKILL':
-            return constant.S_HEXAKILL
-        elif subtype == 'KING_PORO':
-            return constant.S_KING_PORO
-        elif subtype == 'COUNTER_PICK':
-            return constant.S_COUNTER_PICK
-        elif subtype == 'BILGEWATER':
-            return constant.S_BILGEWATER
-        elif subtype == 'SIEGE':
-            return constant.S_SIEGE
-        
-        raise TypeConvertError("subtype conversion fail")
-    
-    def player_stat_summary_type_convertor(self, type):
-        if type == 'Unranked':
-            return constant.PS_Unranked
-        if type == 'Unranked3x3':
-            return constant.PS_Unranked3x3
-        if type == 'OdinUnranked':
-            return constant.PS_OdinUnranked
-        if type == 'AramUnranked5x5':
-            return constant.PS_AramUnranked5x5
-        if type == 'CoopVsAI':
-            return constant.PS_CoopVsAI
-        if type == 'CoopVsAI3x3':
-            return constant.PS_CoopVsAI3x3
-        if type == 'RankedSolo5x5':
-            return constant.PS_RankedSolo5x5
-        if type == 'RankedTeam3x3':
-            return constant.PS_RankedTeam3x3
-        if type == 'RankedTeam5x5':
-            return constant.PS_RankedTeam5x5
-        if type == 'OneForAll5x5':
-            return constant.PS_OneForAll5x5
-        if type == 'FirstBlood1x1':
-            return constant.PS_FirstBlood1x1
-        if type == 'FirstBlood2x2':
-            return constant.PS_FirstBlood2x2
-        if type == 'SummonersRift6x6':
-            return constant.PS_SummonersRift6x6
-        if type == 'CAP5x5':
-            return constant.PS_CAP5x5
-        if type == 'URF':
-            return constant.PS_URF
-        if type == 'URFBots':
-            return constant.PS_URFBots
-        if type == 'RankedPremade3x3':
-            return constant.PS_RankedPremade3x3
-        if type == 'RankedPremade5x5':
-            return constant.PS_RankedPremade5x5
-        if type == 'NightmareBot ':
-            return constant.PS_NightmareBot
-        if type == 'Ascension':
-            return constant.PS_Ascension
-        if type == 'Hexakill':
-            return constant.PS_Hexakill
-        if type == 'KingPoro':
-            return constant.PS_KingPoro
-        if type == 'CounterPick':
-            return constant.PS_CounterPick
-        if type == 'Bilgewater':
-            return constant.PS_Bilgewater
-        if type == 'Siege':
-            return constant.PS_Siege
-        print type
-        raise TypeConvertError("player stat summary type conversion fail")
-    
-    def queue_type_convertor(self, type):
-        if type == 'CUSTOM':
-            return constant.QT_CUSTOM
-        if type == 'NORMAL_3x3':
-            return constant.QT_NORMAL_3x3
-        if type == 'NORMAL_5x5_BLIND':
-            return constant.QT_NORMAL_5x5_BLIND
-        if type == 'NORMAL_5x5_DRAFT':
-            return constant.QT_NORMAL_5x5_DRAFT
-        if type == 'RANKED_SOLO_5x5':
-            return constant.QT_RANKED_SOLO_5x5
-        if type == 'RANKED_PREMADE_5x5':
-            return constant.QT_RANKED_PREMADE_5x5
-        if type == 'RANKED_PREMADE_3x3':
-            return constant.QT_RANKED_PREMADE_3x3
-        if type == 'RANKED_TEAM_3x3':
-            return constant.QT_RANKED_TEAM_3x3
-        if type == 'RANKED_TEAM_5x5':
-            return constant.QT_RANKED_TEAM_5x5
-        if type == 'ODIN_5x5_BLIND':
-            return constant.QT_ODIN_5x5_BLIND
-        if type == 'ODIN_5x5_DRAFT':
-            return constant.QT_ODIN_5x5_DRAFT
-        if type == 'BOT_5x5':
-            return constant.QT_BOT_5x5
-        if type == 'BOT_ODIN_5x5':
-            return constant.QT_BOT_ODIN_5x5
-        if type == 'BOT_5x5_INTRO':
-            return constant.QT_BOT_5x5_INTRO
-        if type == 'BOT_5x5_BEGINNER':
-            return constant.QT_BOT_5x5_BEGINNER
-        if type == 'BOT_5x5_INTERMEDIATE':
-            return constant.QT_BOT_5x5_INTERMEDIATE
-        if type == 'BOT_TT_3x3':
-            return constant.QT_BOT_TT_3x3
-        if type == 'GROUP_FINDER_5x5':
-            return constant.QT_GROUP_FINDER_5x5
-        if type == 'ARAM_5x5':
-            return constant.QT_ARAM_5x5
-        if type == 'ONEFORALL_5x5':
-            return constant.QT_ONEFORALL_5x5
-        if type == 'FIRSTBLOOD_1x1':
-            return constant.QT_FIRSTBLOOD_1x1
-        if type == 'FIRSTBLOOD_2x2':
-            return constant.QT_FIRSTBLOOD_2x2
-        if type == 'SR_6x6':
-            return constant.QT_SR_6x6
-        if type == 'URF_5x5':
-            return constant.QT_URF_5x5
-        if type == 'ONEFORALL_MIRRORMODE_5x5':
-            return constant.QT_ONEFORALL_MIRRORMODE_5x5
-        if type == 'BOT_URF_5x5':
-            return constant.QT_BOT_URF_5x5
-        if type == 'NIGHTMARE_BOT_5x5_RANK1':
-            return constant.QT_NIGHTMARE_BOT_5x5_RANK1
-        if type == 'NIGHTMARE_BOT_5x5_RANK2':
-            return constant.QT_NIGHTMARE_BOT_5x5_RANK2
-        if type == 'NIGHTMARE_BOT_5x5_RANK5':
-            return constant.QT_NIGHTMARE_BOT_5x5_RANK5
-        if type == 'ASCENSION_5x5':
-            return constant.QT_ASCENSION_5x5
-        if type == 'HEXAKILL':
-            return constant.QT_HEXAKILL
-        if type == 'BILGEWATER_ARAM_5x5':
-            return constant.QT_BILGEWATER_ARAM_5x5
-        if type == 'KING_PORO_5x5':
-            return constant.QT_KING_PORO_5x5
-        if type == 'COUNTER_PICK':
-            return constant.QT_COUNTER_PICK
-        if type == 'BILGEWATER_5x5':
-            return constant.QT_BILGEWATER_5x5
-        if type == 'SIEGE':
-            return constant.QT_SIEGE
-        if type == 'DEFINITELY_NOT_DOMINION_5x5':
-            return constant.QT_DEFINITELY_NOT_DOMINION_5x5
-        if type == 'TEAM_BUILDER_DRAFT_UNRANKED_5x5':
-            return constant.QT_TEAM_BUILDER_DRAFT_UNRANKED_5x5
-        if type == 'TEAM_BUILDER_DRAFT_RANKED_5x5':
-            return constant.QT_TEAM_BUILDER_DRAFT_RANKED_5x5
-        
-        raise TypeConvertError("queue type conversion fail")
-    def season_int_convertor(self, season):
-        if season == constant.SEASON2013:
-            return 3
-        elif season == constant.SEASON2014:
-            return 4
-        elif season == constant.SEASON2015:
-            return 5
-        elif season == constant.SEASON2016:
-            return 6
-        
-        raise TypeConvertError("season int conversion fail")
-    
-    def int_season_convertor(self, int):
-        if int == 3:
-            return constant.SEASON2013
-        elif int == 4:
-            return constant.SEASON2014
-        elif int == 5:
-            return constant.SEASON2015
-        elif int == 6:
-            return constant.SEASON2016
-        
-        raise TypeConvertError("int season conversion fail")
-    
-    def event_type_convertor(self, type):
-        if type == 'BUILDING_KILL':
-            return constant.ET_BUILDING_KILL
-        if type == 'CHAMPION_KILL':
-            return constant.ET_CHAMPION_KILL
-        if type == 'ELITE_MONSTER_KILL':
-            return constant.ET_ELITE_MONSTER_KILL
-        if type == 'WARD_KILL':
-            return constant.ET_WARD_KILL
-        if type == 'WARD_PLACED':
-            return constant.ET_WARD_PLACED
-        if type == 'ITEM_DESTROYED':
-            return constant.ET_ITEM_DESTROYED
-        if type == 'ITEM_PURCHASED':
-            return constant.ET_ITEM_PURCHASED
-        if type == 'ITEM_SOLD':
-            return constant.ET_ITEM_SOLD
-        if type == 'ITEM_UNDO':
-            return constant.ET_ITEM_UNDO
-        if type == 'SKILL_LEVEL_UP':
-            return constant.ET_SKILL_LEVEL_UP
-        
-        raise TypeConvertError("event type conversion fail")
-        
-    def building_type_convertor(self, type):
-        if type == 'TOWER_BUILDING':
-            return constant.BT_TOWER_BUILDING
-        if type == 'INHIBITOR_BUILDING':
-            return constant.BT_INHIBITOR_BUILDING
-        
-        raise TypeConvertError("building type conversion fail")
-    
-    
-    def tower_type_convertor(self, type):
-        if type == 'OUTER_TURRET':
-            return constant.TT_OUTER_TURRET
-        if type == 'INNER_TURRET':
-            return constant.TT_INNER_TURRET
-        if type == 'BASE_TURRET':
-            return constant.TT_BASE_TURRET
-        if type == 'NEXUS_TURRET':
-            return constant.TT_NEXUS_TURRET
-        if type == 'UNDEFINED_TURRET':
-            return constant.TT_UNDEFINED_TURRET
-        
-        raise TypeConvertError("tower type conversion fail")
-    
-    def lane_type_convertor(self, type):
-        if type == 'TOP_LANE':
-            return constant.LT_TOP_LANE
-        if type == 'MID_LANE':
-            return constant.LT_MID_LANE
-        if type == 'BOT_LANE':
-            return constant.LT_BOT_LANE
-        
-        raise TypeConvertError("lane type conversion fail")
-    
-    def monster_type_convertor(self, type):
-        if type == 'BLUE_GOLEM':
-            return constant.MT_BLUE_GOLEM
-        if type == 'RED_LIZARD':
-            return constant.MT_RED_LIZARD
-        if type == 'DRAGON':
-            return constant.MT_DRAGON
-        if type == 'BARON_NASHOR':
-            return constant.MT_BARON_NASHOR
-        if type == 'VILEMAW':
-            return constant.MT_VILEMAW
-        
-        raise TypeConvertError("monster type conversion fail")
-    
-    def ward_type_convertor(self, type):
-        if type == 'SIGHT_WARD':
-            return constant.WT_SIGHT_WARD
-        if type == 'VISION_WARD':
-            return constant.WT_VISION_WARD
-        if type == 'YELLOW_TRINKET':
-            return constant.WT_YELLOW_TRINKET
-        if type == 'YELLOW_TRINKET_UPGRADE':
-            return constant.WT_YELLOW_TRINKET_UPGRADE
-        if type == 'TEEMO_MUSHROOM':
-            return constant.WT_TEEMO_MUSHROOM
-        if type == 'UNDEFINED':
-            return constant.WT_UNDEFINED
-        
-        raise TypeConvertError("ward type conversion fail")
-    
-    def lane_convertor(self, type):
-        if type == 'TOP':
-            return constant.L_TOP
-        if type == 'JUNGLE':
-            return constant.L_JUNGLE
-        if type == 'MIDDLE':
-            return constant.L_MIDDLE
-        if type == 'BOTTOM':
-            return constant.L_BOTTOM
-        
-        raise TypeConvertError("lane conversion fail")
-    
-    def role_convertor(self, type):
-        if type == 'DUO':
-            return constant.R_DUO
-        if type == 'NONE':
-            return constant.R_NONE
-        if type == 'SOLO':
-            return constant.R_SOLO
-        if type == 'DUO_CARRY':
-            return constant.R_DUO_CARRY
-        if type == 'DUO_SUPPORT':
-            return constant.R_DUO_SUPPORT
-        
-        raise TypeConvertError("role conversion fail")
-    
-Util = Utility()
+    def finalize(self):
+        pass
 
 # Generic class for all updator
 class Updator(object):
@@ -532,40 +223,63 @@ class PentakillUpdator(Updator):
     def __init__(self, module, trial=C_SUMMONER_TRY):
         self.module = module
         self.api = module.api
-        self.db = connector.PentakillDB()
         self.trial = trial
-        self.data = {}
+        self.data = None
+        self.prog = progress_note.ProgressNote()
         
         self.debug = False
         
-    def init(self):
+    def init(self, db=None, initfinal=None):
         try:
-            self.db.init()
-            cursor = self.db.query("set names utf8; set AUTOCOMMIT=0;", multi=True, buffered=False)
+            self.data = {}
+            
+            self.initfinal = initfinal
+                
+            self.new_db = db is None
+            self.db = connector.PentakillDB() if self.new_db else db
+            if self.new_db:
+                self.db.init()
+                
+            cursor = self.db.query("set names utf8; set AUTOCOMMIT=0;", 
+                                   multi=True, buffered=False)
             cursor.close()
+            self.prog.reset()
         except error.Error as e:
             raise DBError(str(e))
         except Exception as e:
             raise UnknownError(str(e))
         
-        
+    def get_progression(self):
+        return self.prog.look()
+    
+    def completed(self):
+        return self.prog.completed()
+    
     # puts dictionary 'data' containing data for update
     # data can be accessed from self.data in _update method
     # data is shallow copied.
     def put_data(self, data):
         self.data = data.copy()
         
+    def get_data(self):
+        return self.data
+        
     # pentakill generic update routine
     # returns true for success, raise Error for failure
     def update(self):
         trial = 0
-        import traceback
         while True:
             try:
-                self.db.begin()
+                if self.new_db:
+                    self.db.begin()
+                if self.initfinal:
+                    self.initfinal.init(self)                    
+                    self.initfinal.initialize()
                 self._update()
+                if self.initfinal:
+                    self.initfinal.finalize()
             except (Error, error.Error, Exception) as err:
-                traceback.print_exc()
+                #traceback.print_exc()
                 try:
                     raise err
                 except Error as err:
@@ -578,8 +292,12 @@ class PentakillUpdator(Updator):
                 try:
                     self.db.rollback()
                     self._rollback()
+                    if self.initfinal:
+                        self.initfinal.rollback()
                 except error.Error as err:
                     raise DBError(str(err))
+                except Exception as err:
+                    raise UnknownError(str(err))
                 # rollback end
                 trial += 1
                 if trial >= self.trial:
@@ -611,6 +329,7 @@ class PentakillUpdator(Updator):
     
     def close(self):
         self.db.close()
+        self.new_db = True
         
     def _wait_response(self, respond):
         if not respond.wait_response(T_WAIT):
@@ -623,7 +342,8 @@ class PentakillUpdator(Updator):
             raise APITimeout("Sever do not respond too long")
         else:
             return ret
-
+        
+    # Check fastResponse response code and status code
     def _check_response(self, res, notfound=True):
         if res[0] == lolfastapi.FS_TIMEOUT:
             raise APITimeout("Sever do not respond too long")
@@ -645,6 +365,34 @@ class PentakillUpdator(Updator):
     def set_debug(self, level=True):
         self.debug = level
         
+    def _get_game_query(self):
+        query1 = ("insert into games (game_id, create_date, time_played, "
+                  "game_mode, game_type, sub_type) "
+                  "values (%s, %s, %s, %s, %s, %s) "
+                  "on duplicate key update "
+                  "game_id = values(game_id)")
+        return query1
+    
+    def _get_game_detail_query(self):
+        ss = '%s' + ', %s'* 41
+        # Game detail update
+        query1 = ("insert into game_detail ( "
+                  "s_id, game_id, champion_id, team_id, ip_earned, is_win, "
+                  "spell1, spell2, level, item0, item1, item2, item3, item4, "
+                  "item5, item6, gold, minions_killed, neutral_killed_your_jungle, "
+                  "neutral_killed_enemy_jungle, kills, death, assist, "
+                  "physical_damage_to_champions, magic_damage_to_champions, "
+                  "true_damage_to_champions, total_damage_dealt, "
+                  "physical_damage_taken, magic_damage_taken, true_damage_taken, "
+                  "sightwards_bought, visionwards_bought, ward_placed, "
+                  "ward_killed, double_kills, triple_kills, quadra_kills, "
+                  "penta_kills, unreal_kills, season, lane, role) "
+                  "values ({0}) "
+                  "on duplicate key update "
+                  "s_id = values(s_id), "
+                  "game_id = values(game_id)").format(*(ss,))
+        return query1
+        
 # Update summoner data by id or name
 # data dictionary must contain "id" or "name" key
 # at least one of two must be given.
@@ -654,8 +402,16 @@ class PentakillUpdator(Updator):
 # id : int, summoner id
 class SummonerUpdator(PentakillUpdator):
     def __init__(self, module):
-        PentakillUpdator.__init__(self, module, C_SUMMONER_TRY)
-    
+        super(SummonerUpdator, self).__init__(module, C_SUMMONER_TRY)
+        
+    def _rollback(self):
+        data = {}
+        if 'id' in self.data:
+            data['id'] = self.data['id']
+        elif 'name' in self.data:
+            data['name'] = self.data['name']
+        self.data = data
+        
     def _update(self):
         self.data['season'] = season = Util.season_int_convertor(config.SEASON)
         if 'id' in self.data:
@@ -745,13 +501,11 @@ class SummonerUpdator(PentakillUpdator):
         self._wait_response(response)
                 
         for name, res in response:
-            #print name, res
-            if self._check_response(res, notfound=False):
-                if name == 'summoner':
-                    #print res
+            if name == 'summoner':
+                if self._check_response(res):
                     self.data[name] = res[1][1][str(id)]
-                else:
-                    self.data[name] = res[1][1]
+            elif self._check_response(res, notfound=False):
+                self.data[name] = res[1][1]
                     
     def _get_summoner_data_by_name(self):
         data = self.data
@@ -766,7 +520,7 @@ class SummonerUpdator(PentakillUpdator):
         res = response.get_response('summoner')
         
         self._check_response(res)
-        #print res
+        
         data['summoner'] = res[1][1][name.decode('utf8')]
         
     def _get_summoner_data_by_id(self):
@@ -809,25 +563,25 @@ class SummonerUpdator(PentakillUpdator):
                 if row[0] != id:
                     # set current one to dead summoner
                     self.db.query("update summoners set live = 0 where s_id = %s", (row[0],)).close()
-                    print "dead summoner found"
+                    #print "dead summoner found"
                 elif row[1] >= revisionDate:
                     query = (("update summoners "
                               "set last_update = UNIX_TIMESTAMP(now()), "
                               "level = %s, "
                               "s_icon = %s "
                               "where s_id = %s"))
-                    print 'summoner up to date'
+                    #print 'summoner up to date'
                     self.db.query(query, (summonerLevel, profileIconId, id)).close()
                     break
-            else:
-                print "row not found"
+            #else:
+            #    print "row not found"
             
             # check if summoner name has been changed
             result = self.db.query("select s_name from summoners where s_id = %s", (id,))
             row = result.fetchRow()
             result.close()
             if row and row[0].encode('utf8') != name:
-                print "new name"
+                #print "new name"
                 query = ("insert into summoner_name_changes(s_id, s_name, confirmed_time) "
                          "values (%s, %s, UNIX_TIMESTAMP(now()))")
                 result = self.db.query(query, (id, name))
@@ -856,10 +610,12 @@ class SummonerUpdator(PentakillUpdator):
         if not 'leagues' in self.data:
             return
         apidat = self.data['leagues'][str(id)]
-        #print apidat
         
         query1 = ("insert into tier_transition (s_id, tier, division, lp, time) "
-                  "values (%s, %s, %s, %s, UNIX_TIMESTAMP(now()))")
+                  "values (%s, %s, %s, %s, UNIX_TIMESTAMP(now()))"
+                  "on duplicate key update "
+                  "s_id = values(s_id),"
+                  "time = values(time)")
         # insert league data
         query2 = ("insert into league (s_id, league_id, player_or_team_name, "
                   "queue, name, tier, division, lp, is_fresh, is_inactive, is_veteran, "
@@ -929,7 +685,7 @@ class SummonerUpdator(PentakillUpdator):
         if not 'stats' in self.data:
             return
         apidat = self.data['stats']
-        #print apidat
+        
         stats = apidat['playerStatSummaries']
         season = self.data['season']
         query = ("insert into stats (s_id, season, sub_type, win, lose) "
@@ -952,31 +708,12 @@ class SummonerUpdator(PentakillUpdator):
         if not 'games' in self.data:
             return
         apidat = self.data['games']
-        #print apidat['games'][0]
+        
         season = self.data['season']
         
-        query1 = ("insert into games (game_id, create_date, time_played, "
-                  "game_mode, game_type, sub_type) "
-                  "values (%s, %s, %s, %s, %s, %s) "
-                  "on duplicate key update "
-                  "game_id = values(game_id)")
-        ss = '%s, ' * 40
+        query1 = self._get_game_query()
         # Game detail update
-        query2 = ("insert into game_detail ( "
-                  "s_id, game_id, champion_id, team_id, ip_earned, is_win, "
-                  "spell1, spell2, level, item0, item1, item2, item3, item4, "
-                  "item5, item6, gold, minions_killed, neutral_killed_your_jungle, "
-                  "neutral_killed_enemy_jungle, kills, death, assist, "
-                  "physical_damage_to_champions, magic_damage_to_champions, "
-                  "true_damage_to_champions, total_damage_dealt, "
-                  "physical_damage_taken, magic_damage_taken, true_damage_taken, "
-                  "sightwards_bought, visionwards_bought, ward_placed, "
-                  "ward_killed, double_kills, triple_kills, quadra_kills, "
-                  "penta_kills, unreal_kills, season, lane, role) "
-                  "values ({0}null, null) "
-                  "on duplicate key update "
-                  "s_id = values(s_id), "
-                  "game_id = values(game_id)").format(*(ss,))
+        query2 = self._get_game_detail_query()
         # Fellow update
         query3 = ("insert into game_fellows values (%s, %s, %s, %s) "
                   "on duplicate key update "
@@ -985,7 +722,7 @@ class SummonerUpdator(PentakillUpdator):
         for game in apidat['games']:
             stats = game['stats']
             fellows = game['fellowPlayers'] if 'fellowPlayers' in game else None
-            #print game
+            
             gameId = game['gameId']
             championId = game['championId']
             createDate = int(game['createDate'] / 1000)
@@ -1050,9 +787,8 @@ class SummonerUpdator(PentakillUpdator):
                     totalDamageDealt, physicalDamageTaken, magicDamageTaken,
                     trueDamageTaken, sightWardsBought, visionWardsBought,
                     wardPlaced, wardKilled, doubleKills, tripleKills, quadraKills,
-                    pentaKills, unrealKills, season)
+                    pentaKills, unrealKills, season, None, None)
             
-            #print query % args
             self.db.query(query2, args).close()
             
             args = (gameId, id, teamId, championId)
@@ -1132,13 +868,18 @@ class SummonerUpdator(PentakillUpdator):
 # id : summoner id
 class RuneMasteryUpdator(PentakillUpdator):
     def __init__(self, module):
-        PentakillUpdator.__init__(self, module, C_SUMMONER_TRY)
+        super(RuneMasteryUpdator, self).__init__(module, C_RUNE_MASTERY_TRY)
+        
+    def _rollback(self):
+        data = {}
+        if 'id' in self.data:
+            data['id'] = self.data['id']
+        self.data = data
         
     def _update(self):
         self._get_api_data()
         self._update_runes()
         self._update_masteries()
-        #print 'rune mastery updata success'
         return True
         
     def _get_api_data(self):
@@ -1199,7 +940,7 @@ class RuneMasteryUpdator(PentakillUpdator):
         # Entries in mastery slots will be deleted automatically by foriegn key 
         # cascading
         #print str(pids)[1:-1]
-        self.db.query(query4, (id, str(pids)[1:-1].replace(' ', ''))).close()
+        self.db.query(query4, (id, Util.list_to_str(pids))).close()
         
     def _update_masteries(self):
         id = self.data['id']
@@ -1242,26 +983,42 @@ class RuneMasteryUpdator(PentakillUpdator):
                 args = (pageId, masteryId, rank)
                 self.db.query(query3, args).close()
                 
-        self.db.query(query4, (id, str(pids)[1:-1].replace(' ', ''))).close()
+        self.db.query(query4, (id, Util.list_to_str(pids))).close()
     
 # id : match id
 class MatchUpdator(PentakillUpdator):
     def __init__(self, module):
-        PentakillUpdator.__init__(self, module, C_SUMMONER_TRY)
+        super(MatchUpdator, self).__init__(module, C_MATCH_TRY)
+        
+    def _rollback(self):
+        data = {}
+        if 'id' in self.data:
+            data['id'] = self.data['id']
+        self.data = data
         
     def _update(self):
+        self.data['season'] = season = Util.season_int_convertor(config.SEASON)
+        if self._check_updated():
+            return True
         self._get_match_data()
         if not self._validate_match():
             raise UnsupportedMatchError('unsupported queue type')
-        
-        
+        self.data['matchId'] = self.data['match']['matchId']
+        self._update_game()
+        if not self.data['details_updated']:
+            self._update_participants()
+        self._update_teams()
+        if not self.data['events_updated']:
+            self._process_timeline()
+            self._update_events()
+            self._update_participant_frames()
         return True
     
     def _get_match_data(self):
         id = self.data['id']
         
         reqs = lolfastapi.FastRequest()
-        reqs.add_request_name('match', (lolapi.LOLAPI.get_match, (id,)))
+        reqs.add_request_name('match', (lolapi.LOLAPI.get_match, (id, 'true')))
         
         response = self.api.get_multiple_data(reqs)
         self._wait_response(response)
@@ -1283,28 +1040,453 @@ class MatchUpdator(PentakillUpdator):
                   constant.QT_BOT_5x5_INTRO,
                   constant.QT_BOT_5x5_BEGINNER,
                   constant.QT_BOT_5x5_INTERMEDIATE,
-                  constant.QT_ARAM_5x5,
+                  #constant.QT_ARAM_5x5,
                   constant.QT_URF_5x5,
                   constant.QT_TEAM_BUILDER_DRAFT_UNRANKED_5x5,
                   constant.QT_TEAM_BUILDER_DRAFT_RANKED_5x5,])
         
-        if type in queue:
+        if Util.queue_type_convertor(queueType) in queue:
             return True
         else:
             return False
         
-    def _update_participants(self):
-        apidata = self.data['match']
+    # If game is not in table, add to games table
+    def _update_game(self):
+        apidat = self.data['match']
+        matchId = self.data['matchId']
         
+        # Here queueType is used to identify game type instead of subType
+        query = ("insert into games (game_id, create_date, time_played, "
+                 "game_mode, game_type, queue_type) "
+                 "values (%s, %s, %s, %s, %s, %s) "
+                 "on duplicate key update "
+                 "game_id = values(game_id)")
+        
+        createDate = int(apidat['matchCreation'] / 1000)
+        timePlayed = apidat['matchDuration']
+        gameMode = Util.game_mode_convertor(apidat['matchMode'])
+        gameType = Util.game_type_convertor(apidat['matchType'])
+        queueType = Util.queue_type_convertor(apidat['queueType'])
+        
+        args = (matchId, createDate, timePlayed, gameMode, gameType, queueType)
+        self.db.query(query, args).close()
+        
+    # Returns True if the match is not updated, False otherwise
+    def _check_updated(self):
+        ret = True
+        
+        query = ("select details_updated, events_updated "
+                 "from games where game_id = %s")
+        
+        self.data['details_updated'] = False
+        self.data['events_updated'] = False
+        args = (self.data['id'],)
+        while True:
+            result = self.db.query(query, args)
+            row = result.fetchRow()
+            if not row:
+                ret = False
+                break
+            detail, event = row[0], row[1]
+            self.data['details_updated'] = True if detail else False
+            self.data['events_updated'] = True if event else False
+            if detail != 1 or event != 1:
+                ret = False
+                break
+            break
+        
+        result.close()
+        return ret
+        
+    def _update_participants(self):
+        apidat = self.data['match']
+        matchId = self.data['matchId']
+        
+        query1 = ("select s_id from summoners "
+                  "where find_in_set(s_id, %s) and enrolled = 1 and live = 1")
+        
+        query2 = ("insert into game_participants (game_id, s_id, participant_id) "
+                  "values (%s, %s, %s) "
+                  "on duplicate key update "
+                  "game_id = values(game_id),"
+                  "s_id = values(s_id),"
+                  "participant_id = values(participant_id)")
+        
+        query3 = self._get_game_detail_query()
+        
+        participants = apidat['participants']
+        identities = apidat['participantIdentities']
+        
+        unknownSummoners = []
+        for identity in identities:
+            print identity
+            sId = identity['player']['summonerId']
+            unknownSummoners.append(sId)
+        
+        ids = Util.list_to_str(unknownSummoners)
+        result = self.db.query(query1, (ids,))
+        
+        for row in result:
+            unknownSummoners.remove(row[0])
+        
+        result.close()
+        
+        # Update unknown summoners
+        if len(unknownSummoners) > 0:
+            self._update_unknown_summoners(unknownSummoners)
+        
+        season = self.data['season']
+        # Match participant Id and summoner Id
+        for identity in identities:
+            sId = identity['player']['summonerId']
+            pId1 = identity['participantId']
+            for participant in participants:
+                    pId2 = participant['participantId']
+                    if pId1 != pId2:
+                        continue
+                    # Update participant info
+                    args = (matchId, sId, pId1)
+                    self.db.query(query2, args).close()
+                    
+                    # Update game detail info
+                    teamId = participant['teamId']
+                    championId = participant['championId']
+                    stats = participant['stats']
+                    mastery = participant['masteries']
+                    timeline = participant['timeline']
+                    
+                    teamId = participant['teamId']
+                    spell1 = participant['spell1Id']
+                    spell2 = participant['spell2Id']
+                    level = stats['champLevel']
+                    gold = stats['goldEarned']
+                    minionsKilled = stats['minionsKilled'] if 'minionsKilled' in stats else 0
+                    neutralYourJungle = stats['neutralMinionsKilledTeamJungle'] if 'neutralMinionsKilledTeamJungle' in stats else 0
+                    neutralEnemyJungle = stats['neutralMinionsKilledEnemyJungle'] if 'neutralMinionsKilledEnemyJungle' in stats else 0
+                    championsKilled = stats['kills'] if 'kills' in stats else 0
+                    numDeaths = stats['deaths'] if 'deaths' in stats else 0
+                    assists = stats['assists'] if 'assists' in stats else 0
+                    physicalDamageDealtToChampions = stats['physicalDamageDealtToChampions'] if 'physicalDamageDealtToChampions' in stats else 0
+                    magicDamageDealtToChampions = stats['magicDamageDealtToChampions'] if 'magicDamageDealtToChampions' in stats else 0
+                    trueDamageDealtToChampions = stats['trueDamageDealtToChampions'] if 'trueDamageDealtToChampions' in stats else 0
+                    totalDamageDealt = stats['totalDamageDealt'] if 'totalDamageDealt' in stats else 0
+                    physicalDamageTaken = stats['physicalDamageTaken'] if 'physicalDamageTaken' in stats else 0
+                    magicDamageTaken = stats['magicDamageTaken'] if 'magicDamageTaken' in stats else 0
+                    trueDamageTaken = stats['trueDamageTaken'] if 'trueDamageTaken' in stats else 0
+                    sightWardsBought = stats['sightWardsBoughtInGame'] if 'sightWardsBoughtInGame' in stats else 0
+                    visionWardsBought = stats['visionWardsBoughtInGame'] if 'visionWardsBoughtInGame' in stats else 0
+                    wardPlaced = stats['wardPlaced'] if 'wardPlaced' in stats else 0
+                    wardKilled = stats['wardKilled'] if 'wardKilled' in stats else 0
+                    item0 = stats['item0'] if 'item0' in stats else None
+                    item1 = stats['item1'] if 'item1' in stats else None
+                    item2 = stats['item2'] if 'item2' in stats else None
+                    item3 = stats['item3'] if 'item3' in stats else None
+                    item4 = stats['item4'] if 'item4' in stats else None
+                    item5 = stats['item5'] if 'item5' in stats else None
+                    item6 = stats['item6'] if 'item6' in stats else None
+                    doubleKills = stats['doubleKills'] if 'doubleKills' in stats else 0
+                    tripleKills = stats['tripleKills'] if 'tripleKills' in stats else 0
+                    quadraKills = stats['quadraKills'] if 'quadraKills' in stats else 0
+                    pentaKills = stats['pentaKills'] if 'pentaKills' in stats else 0
+                    unrealKills = stats['unrealKills'] if 'unrealKills' in stats else 0
+                    win = stats['winner']
+                    lane = Util.lane_convertor(timeline['lane'])
+                    role = Util.role_convertor(timeline['role'])
+                    
+                    args = (sId, matchId, championId, teamId, None, win, spell1, spell2,
+                            level, item0, item1, item2, item3, item4, item5, item6, gold,
+                            minionsKilled, neutralYourJungle, neutralEnemyJungle,
+                            championsKilled, numDeaths, assists, physicalDamageDealtToChampions,
+                            magicDamageDealtToChampions, trueDamageDealtToChampions,
+                            totalDamageDealt, physicalDamageTaken, magicDamageTaken,
+                            trueDamageTaken, sightWardsBought, visionWardsBought,
+                            wardPlaced, wardKilled, doubleKills, tripleKills, quadraKills,
+                            pentaKills, unrealKills, season, lane, role)
+                    
+                    self.db.query(query3, args).close()
+                        
+        # set details updated flag
+        query = ("update games set details_updated = true where game_id = %s")
+        self.db.query(query, (matchId,)).close()
+            
+    def _update_unknown_summoners(self, lids):
+        print 'update unknown summoners'
+        
+        query = ("insert into summoners (s_id, s_name, s_name_abbre, enrolled) "
+                 "values {0} "
+                 "on duplicate key update "
+                 "s_name = values(s_name),"
+                 "s_name_abbre = values(s_name_abbre)")
+        
+        ids = Util.list_to_str(lids)
+        reqs = lolfastapi.FastRequest()
+        reqs.add_request_name('summoners', (lolapi.LOLAPI.get_summoners_by_ids, (ids,)))
+        
+        response = self.api.get_multiple_data(reqs)
+        self._wait_response(response)
+        
+        res = response.get_response('summoners')
+        if self._check_response(res):
+            form = '(%s, %s, %s, 0)' + ', (%s, %s, %s, 0)' * (len(lids) - 1)
+            largs = []
+            for id in lids:
+                summoner = res[1][1][str(id)]
+                name = summoner['name'].encode('utf8')
+                nameAbbre = Util.abbre_names(name)
+                largs.append(id)
+                largs.append(name)
+                largs.append(nameAbbre)
+            args = tuple(largs)
+            #print query.format(*(form,))
+            #print args
+            self.db.query(query.format(*(form,)), args).close()
+    
     def _update_teams(self):
-        apidata = self.data['match']
+        apidat = self.data['match']
+        matchId = self.data['matchId']
+        
+        ss = '%s' + ', %s' * 15
+        query = ("insert into game_teams ("
+                 "game_id, team_id, inhibitor_kills, tower_kills, first_tower, "
+                 "first_blood, first_baron, first_inhibitor, first_dragon, "
+                 "is_win, baron_kills, dragon_kills, vilemaw_kills, ban1, ban2, ban3) "
+                 "values ({0}) "
+                 "on duplicate key update "
+                 "game_id = values(game_id),"
+                 "team_id = values(team_id)").format(*(ss,))
+        
+        teams = apidat['teams']
+        for team in teams:
+            #print team
+            teamId = team['teamId']
+            firstTower = team['firstTower']
+            firstBlood = team['firstBlood']
+            firstBaron = team['firstBaron']
+            firstInhibitor = team['firstInhibitor']
+            firstDragon = team['firstDragon']
+            winner = team['winner']
+            
+            vilemawKills = team['vilemawKills'] if 'vilemawKills' in team else 0
+            baronKills = team['baronKills'] if 'baronKills' in team else 0
+            dragonKills = team['dragonKills'] if 'dragonKills' in team else 0
+            inhibitorKills = team['inhibitorKills'] if 'inhibitorKills' in team else 0
+            towerKills = team['towerKills'] if 'towerKills' in team else 0
+            
+            bans = team['bans']
+            banList = [{'pickTurn':i*2+1, 'championId':None} for i in range(3)]
+            if bans:
+                for i in range(min(3, len(bans))):
+                    if bans[i]['pickTurn'] // 2 > 3:
+                        continue
+                    banList[i] = bans[i]
+
+            banList.sort(key=lambda x: x['pickTurn'] if x is not None else 999)
+            #print banList
+            for i in range(len(banList)):
+                banList[i] = banList[i]['championId']
+            
+            #print banList
+            args = (matchId, teamId, inhibitorKills, towerKills, firstTower,
+                    firstBlood, firstBaron, firstInhibitor, firstDragon, winner,
+                    baronKills, dragonKills, vilemawKills, banList[0], banList[1],
+                    banList[2])
+            
+            self.db.query(query, args).close()
+            
+    def _process_timeline(self):
+        apidat = self.data['match']
+        if not 'timeline' in apidat:
+            return
+        timeline = apidat['timeline']
+        frames = timeline['frames']
+        
+        frames.sort(key=lambda x: x['timestamp'])
+        self.data['timeline'] = timeline
 
     def _update_events(self):
-        apidata = self.data['match']
+        matchId = self.data['matchId']
+        if not 'timeline' in self.data:
+            return
         
+        query1 = ("insert into game_events_buildings ("
+                  "game_id, creator_id, timestamp, event_type, "
+                  "killer_id, pos_x, pos_y, lane_type, building_type, tower_type) "
+                  "values {0}")
+        query2 = ("insert into game_events_kills ("
+                  "game_id, creator_id, timestamp, event_type, "
+                  "killer_id, victim_id, pos_x, pos_y) "
+                  "values {0}")
+        query3 = ("insert into game_events_monsters ("
+                  "game_id, creator_id, timestamp, event_type, "
+                  "killer_id, pos_x, pos_y, monster_type) "
+                  "values {0}")
+        query4 = ("insert into game_events_wards ("
+                  "game_id, creator_id, timestamp, event_type, "
+                  "killer_id, pos_x, pos_y, ward_type) "
+                  "values {0}")
+        query5 = ("insert into game_events_items ("
+                  "game_id, creator_id, timestamp, event_type, "
+                  "item_id, item_before, item_after) "
+                  "values {0}")
+        query6 = ("insert into game_events_skills ("
+                  "game_id, creator_id, timestamp, event_type, "
+                  "skill_slot, level_up_type) "
+                  "values {0}")
+        queryl = ("update games "
+                  "set events_updated = true "
+                  "where game_id = %s")
+        s10 = '%s' + ', %s' * 9
+        s8 = '%s' + ', %s' * 7
+        s7 = '%s' + ', %s' * 6
+        s6 = '%s' + ', %s' * 5
+        
+        timeline = self.data['timeline']
+        frames = timeline['frames']
+        
+        for frame in frames:
+            if not 'events' in frame:
+                continue
+            #print 'events'
+            events = frame['events']
+            buildingEventSS, buildingEventArgs = [], []
+            championKillEventSS, championKillEventArgs = [], []
+            monsterKillEventSS, monsterKillEventArgs = [], []
+            wardEventSS, wardEventArgs = [], []
+            itemEventSS, itemEventArgs = [], []
+            skillEventSS, skillEventArgs = [], []
+            for event in events:
+                eventType = Util.event_type_convertor(event['eventType'])
+                creatorId = event['participantId'] if 'participantId' in event else None
+                if creatorId == 0:
+                    creatorId = None                
+                timestamp = event['timestamp']
+                
+                teamId = event['teamId'] if 'teamId' in event else None
+                itemId = event['itemId'] if 'itemId' in event else None
+                itemAfter = event['itemAfter'] if 'itemAfter' in event else None
+                itemBefore = event['itemBefore'] if 'itemBefore' in event else None
+                skillSlot = event['skillSlot'] if 'skillSlot' in event else None
+                killerId = event['killerId'] if 'killerId' in event else None
+                victimId = event['victimId'] if 'victimId' in event else None
+                position = event['position'] if 'position' in event else None
+                x, y = None, None
+                if position:
+                    x, y = position['x'], position['y']
+                wardType = Util.ward_type_convertor(event['wardType']) if 'wardType' in event else None
+                buildingType = Util.building_type_convertor(event['buildingType']) if 'buildingType' in event else None
+                monsterType = Util.monster_type_convertor(event['monsterType']) if 'monsterType' in event else None
+                towerType = Util.tower_type_convertor(event['towerType']) if 'towerType' in event else None
+                laneType = Util.lane_type_convertor(event['laneType']) if 'laneType' in event else None
+                levelUpType = Util.level_up_type_convertor(event['levelUpType']) if 'levelUpType' in event else None
+                
+                if eventType == constant.ET_BUILDING_KILL:
+                    values = (matchId, creatorId, timestamp, eventType,
+                              killerId, x, y, laneType, buildingType, towerType)
+                    buildingEventSS.append(s10)
+                    for value in values:
+                        buildingEventArgs.append(value)
+                elif eventType == constant.ET_CHAMPION_KILL:
+                    values = (matchId, creatorId, timestamp, eventType,
+                              killerId, victimId, x, y)
+                    championKillEventSS.append(s8)
+                    for value in values:
+                        championKillEventArgs.append(value)
+                elif eventType == constant.ET_ELITE_MONSTER_KILL:
+                    values = (matchId, creatorId, timestamp, eventType, 
+                              killerId, x, y, monsterType)
+                    monsterKillEventSS.append(s8)
+                    for value in values:
+                        monsterKillEventArgs.append(value)
+                elif (eventType == constant.ET_WARD_KILL or
+                      eventType == constant.ET_WARD_PLACED):
+                    values = (matchId, creatorId, timestamp, eventType, 
+                              killerId, x, y, wardType)
+                    wardEventSS.append(s8)
+                    for value in values:
+                        wardEventArgs.append(value)
+                elif (eventType == constant.ET_ITEM_DESTROYED or
+                      eventType == constant.ET_ITEM_PURCHASED or
+                      eventType == constant.ET_ITEM_SOLD or
+                      eventType == constant.ET_ITEM_UNDO):
+                    values = (matchId, creatorId, timestamp, eventType, 
+                              itemId, itemBefore, itemAfter)
+                    itemEventSS.append(s7)
+                    for value in values:
+                        itemEventArgs.append(value)
+                elif eventType == constant.ET_SKILL_LEVEL_UP:
+                    values = (matchId, creatorId, timestamp, eventType,
+                              skillSlot, levelUpType)
+                    skillEventSS.append(s6)
+                    for value in values:
+                        skillEventArgs.append(value)
+                
+            if buildingEventArgs:
+                self.db.query(query1.format(*('(' + '), ('.join(buildingEventSS) + ')',)), 
+                              tuple(buildingEventArgs)).close()
+            if championKillEventArgs:
+                self.db.query(query2.format(*('(' + '), ('.join(championKillEventSS) + ')',)), 
+                              tuple(championKillEventArgs)).close()
+            if monsterKillEventArgs:
+                self.db.query(query3.format(*('(' + '), ('.join(monsterKillEventSS) + ')',)), 
+                              tuple(monsterKillEventArgs)).close()
+            if wardEventArgs:
+                self.db.query(query4.format(*('(' + '), ('.join(wardEventSS) + ')',)), 
+                              tuple(wardEventArgs)).close()
+            if itemEventArgs:
+                self.db.query(query5.format(*('(' + '), ('.join(itemEventSS) + ')',)), 
+                              tuple(itemEventArgs)).close()
+            if skillEventArgs:
+                self.db.query(query6.format(*('(' + '), ('.join(skillEventSS) + ')',)), 
+                              tuple(skillEventArgs)).close()
+        self.db.query(queryl, (matchId,)).close()
+            
     def _update_participant_frames(self):
-            apidata = self.data['match']
-    
+        matchId = self.data['matchId']
+        if not 'timeline' in self.data:
+            return
+
+        timeline = self.data['timeline']
+        frames = timeline['frames']
+        #print ' timeline'
+        query = ("insert into game_participant_frames ("
+                 "game_id, participant_id, timestamp, gold, xp, level, "
+                 "minions_killed, jungle_minions_killed) "
+                 "values (%s, %s, %s, %s, %s, %s, %s, %s) "
+                 "on duplicate key update "
+                 "game_id = values(game_id),"
+                 "participant_id = values(participant_id)")
+        
+        frameInterval = timeline['frameInterval']
+        prevTimestamp = 0
+        for frame in frames:
+            timestamp = frame['timestamp']
+            if timestamp - prevTimestamp < frameInterval - 200:
+                continue
+            
+            pFrames = frame['participantFrames']
+            for pId in pFrames:
+                pFrame = pFrames[pId]
+                totalGold = pFrame['totalGold']
+                level = pFrame['level']
+                xp = pFrame['xp']
+                minionsKilled = pFrame['minionsKilled'] if 'minionsKilled' in pFrame else 0
+                jungleMinionsKilled = pFrame['jungleMinionsKilled'] if 'jungleMinionsKilled' in pFrame else 0
+                
+                args = (matchId, int(pId), timestamp, totalGold, xp, level,
+                        minionsKilled, jungleMinionsKilled)
+                
+                self.db.query(query, args).close()
+                
+class CurrentGameUpdator(PentakillUpdator):
+    def __init__(self, module):
+        super(CurrentGameUpdator, self).__init__(module, C_CURRENT_GAME_TRY)
+        
+    def _rollback(self):
+        data = {}
+        if 'id' in self.data:
+            data['id'] = self.data['id']
+        self.data = data
+            
 '''
 errno
 '''
@@ -1377,43 +1559,72 @@ if __name__ == '__main__':
     import time
     module = UpdateModule()
     module.init() 
-if __name__ == '__main__':
-    print 'test match update'
-    data = [{'id':2526543207}]
     
+if __name__ == '__maign__':
+    print 'policy and init final test'
+    ID = 2576538
+    begin = time.time()
+    policy = module.getPolicy()
+    ok, left, db = policy.check_summoner_update(id=ID)
+    if not ok:
+        print left, 'sec left for', ID
+        db.close()
+    else:
+        import threading
+        class MyInitFinal(UpdatorInitFinal):
+            def __init__(self, sema):
+                self.sema = sema
+            def initialize(self):
+                print 'initialize update'
+                print self.data
+                
+            def finalize(self):
+                print 'finalize update'
+                self.sema.release()
+        
+        sema = threading.Semaphore(0)        
+        updator = module.getSummonerUpdator()
+        updator.init(db, MyInitFinal(sema))
+        updator.put_data({'id':ID})
+        module.orderUpdate(updator)
+        sema.acquire()
+        end = time.time()
+        print end - begin, 'elapsed'
+    
+if __name__ == '__mfain__':
+    print 'test match update'
+    data = [{'id':2526543207}, {'id':2529517584}]
+    
+    updator = module.getMatchUpdator()
     for i in range(len(data)):
-        if i > 0:
-            time.sleep(10)        
-        updator = module.getMatchUpdator()
         updator.init()
-        updator.set_debug(True)
-        #updator.put_data({"name":u'   \uba38 \ud53c   9  3'})
-        #updator.put_data({"name":'zzz'})
-        #updator.put_data({"name":u' cj entus \ubbfc\uae30'})
         updator.put_data(data[i])
         begin = time.time()
         updator.update()
+        updator.close()
         end = time.time()
         print end - begin, 'sec elapsed'
     print 'test passed'
     
 if __name__ == '__main__':
     print 'test summoner update'
-    data = [{'id':2060159}, {'name':'hide on bush', 'id':4460427}]
-    
+    data = [{'name':'hide on bush', 'id':4460427}, {'id':2576538}, {'id':2060159}]
+    data = [{'name':'hide on bush', 'id':44604274} for i in range(100)]
+    updator = module.getSummonerUpdator()
+    SLEEP = 0
     for i in range(len(data)):
-        if i > 0:
-            time.sleep(10)        
-        updator = module.getSummonerUpdator()
-        updator.init()
-        #updator.put_data({"name":u'   \uba38 \ud53c   9  3'})
-        #updator.put_data({"name":'zzz'})
-        #updator.put_data({"name":u' cj entus \ubbfc\uae30'})
-        updator.put_data(data[i])
-        begin = time.time()
-        updator.update()
-        end = time.time()
-        print end - begin, 'sec elapsed'
+        try:
+            if i > 0:
+                time.sleep(SLEEP)
+            updator.init()
+            updator.put_data(data[i])
+            begin = time.time()
+            updator.update()
+            updator.close()
+            end = time.time()
+            print end - begin, 'sec elapsed'
+        except Exception as err:
+                pass
     print 'test passed'
 
 if __name__ == '__main__':

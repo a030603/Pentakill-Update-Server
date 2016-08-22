@@ -187,7 +187,7 @@ class HTTP(object):
         content = '%s\r\n\r\n' % ('\r\n'.join(headers),)
         
         if self.body is not None:
-            content += body
+            content += self.body
             
         if self._debug:
             print 'headers\n', self.headers
@@ -272,7 +272,7 @@ class HTTP(object):
     def getHeader(self, hname):
         for key in self.headers:
             if key.lower() == hname:
-                return self.headers[key].lower()
+                return str(self.headers[key]).lower()
         return ''
     
     def getResponse(self):

@@ -853,6 +853,7 @@ class LOLCore(object):
                 else:
                     if not self.policy.push_status_code(status_code):
                         self.admin._call_service_unavailable()
+                    self.admin._call_reset_timer()
                     self.global_after_req_mutex.release()
                     self.req_condition.release()
                     break
@@ -1108,7 +1109,6 @@ class LOLFastAPI(object):
                 elif cmd == LOLFastAPI.FCMD_GET:
                     self._serve_get(tup)
                     
-                    
         def _serve_get(self, tup):
             try:
                 cmd_arg = tup[1]
@@ -1126,7 +1126,7 @@ class LOLFastAPI(object):
             if self.state.start_event([LOLFastAPI.S_OK])[0]:
                 do_end = True
                 try:
-                    #print '\nget data\n'
+                    #print '\nget data' + str(self.id) + '\n'
                     result = self.admin.get_data(method, args)
                     #print '\n' + req_name +' get data end\n'
                 except TimeoutError as err:
