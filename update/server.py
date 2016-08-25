@@ -9,13 +9,13 @@ IP = '0.0.0.0'
 PORT = 7777
 BACKLOG = 20
 
-READ_TIMEOUT = 5.0
+READ_TIMEOUT = 100000.0
 LINE_MAX_SIZE = 1024
 
 HDR_SERVER = 'Pentakill Update Server'
 HDR_CONTENT_TYPE = 'text/json; charset=utf-8'
 HDR_ACCESS_CONTROL_ORIGIN = '*'
-HDR_KEEP_ALIVE = 5
+HDR_KEEP_ALIVE = 20
 
 # Update server runs in dedicated thread
 # Each connection runs in another dedicated thread
@@ -116,6 +116,7 @@ class SyncInitFinal(updator.UpdatorInitFinal):
         self.tree = tree
         self.key = key
         self.cond = threading.Condition()
+        self.wait = threading.Semaphore(0)
         
     def get_condition(self):
         return self.cond
@@ -124,6 +125,7 @@ class SyncInitFinal(updator.UpdatorInitFinal):
         pass
         
     def finalize(self):
+        self.wait.acquire()
         self.tree.acquire_mutex()
         self.tree.delete(self.key)
         self.cond.acquire()
@@ -141,6 +143,9 @@ class SyncInitFinal(updator.UpdatorInitFinal):
         tree.release_mutex()
         self.cond.wait()
         self.cond.release()
+        
+    def allow_finalize(self):
+        self.wait.release()
     
 class PollingInitFinal(SyncInitFinal):
     def __init__(self, key, tree):
@@ -148,6 +153,7 @@ class PollingInitFinal(SyncInitFinal):
         self.sema = threading.Semaphore(0)
         
     def initialize(self):
+        super(PollingInitFinal,self).initialize()
         self.sema.release()
         
     def wait_start(self):
@@ -318,9 +324,11 @@ class Server(threading.Thread):
         # wait until completed or started
         if block:
             tree.acquire_mutex()
+            initfinal.allow_finalize()
             initfinal.wait_end(tree)
             return json.dumps({'completed':True})
         else:
+            initfinal.allow_finalize()
             initfinal.wait_start()
             prog = updator.get_progression()
             return json.dumps({'completed':False, 'progress':prog})
@@ -426,6 +434,7 @@ class Server(threading.Thread):
             self.add_header('Access-Control-Allow-Origin', 
                             HDR_ACCESS_CONTROL_ORIGIN, False)
             if self.keep_alive:
+                self.add_header('Connection', 'Keep-Alive', False)
                 self.add_header('Keep-Alive', 'timeout=' + str(HDR_KEEP_ALIVE), False)
             else:
                 self.add_header('Connection', 'close', True)

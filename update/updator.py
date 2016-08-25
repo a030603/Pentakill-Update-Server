@@ -564,7 +564,7 @@ class SummonerUpdator(PentakillUpdator):
             revisionDate = int(apidat["revisionDate"] / 1000)
             
             print name.decode('utf8').encode('cp949')
-            print (id, profileIconId, summonerLevel, revisionDate)            
+            print (id, profileIconId, summonerLevel, revisionDate)
             
             result = self.db.query("select s_id, last_update "
                                    "from summoners where s_name_abbre = %s and live = 1", (nameAbbre,))
