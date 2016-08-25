@@ -184,12 +184,14 @@ class PentakillUpdatePolicy(object):
         result.close()
         if row:
             last_update, cur = row
-            left = C_SUMMONER_UPDATE_RENEW_INTERVAL - cur + last_update
-            left = left if left > 0 else 0
-            if left > 0:
-                return (False, left, db)
-            else:
-                return (True, left, db)
+            if last_update:
+                left = C_SUMMONER_UPDATE_RENEW_INTERVAL - cur + last_update
+                left = left if left > 0 else 0
+                if left > 0:
+                    return (False, left, db)
+                else:
+                    return (True, left, db)
+        
         return (True, None, db)
         
 # Updator's initialize and finalize functions
@@ -223,6 +225,7 @@ class PentakillUpdator(Updator):
     def __init__(self, module, trial=C_SUMMONER_TRY):
         self.module = module
         self.api = module.api
+        self.db = None
         self.trial = trial
         self.data = None
         self.prog = progress_note.ProgressNote()
@@ -248,6 +251,12 @@ class PentakillUpdator(Updator):
             raise DBError(str(e))
         except Exception as e:
             raise UnknownError(str(e))
+        
+    def get_initfinal(self):
+        try:
+            return self.initfinal
+        except AttributeError:
+            return None
         
     def get_progression(self):
         return self.prog.look()
@@ -276,10 +285,8 @@ class PentakillUpdator(Updator):
                     self.initfinal.init(self)                    
                     self.initfinal.initialize()
                 self._update()
-                if self.initfinal:
-                    self.initfinal.finalize()
             except (Error, error.Error, Exception) as err:
-                #traceback.print_exc()
+                traceback.print_exc()
                 try:
                     raise err
                 except Error as err:
@@ -308,11 +315,17 @@ class PentakillUpdator(Updator):
                 try:
                     if not self.debug:
                         self.db.commit()
+                        if self.initfinal:
+                            self.initfinal.finalize()
                     else:
                         print 'debug : rollback'
                         self.db.rollback()
+                        if self.initfinal:
+                            self.initfinal.rollback()
                 except error.Error as err:
                     raise DBError(str(err))
+                except Exception as err:
+                    raise UnknownError(str(err))
                 break
         return True
     
@@ -328,8 +341,9 @@ class PentakillUpdator(Updator):
         pass
     
     def close(self):
-        self.db.close()
-        self.new_db = True
+        if self.db:
+            self.db.close()
+            self.db = None
         
     def _wait_response(self, respond):
         if not respond.wait_response(T_WAIT):
@@ -686,13 +700,16 @@ class SummonerUpdator(PentakillUpdator):
             return
         apidat = self.data['stats']
         
-        stats = apidat['playerStatSummaries']
+        stats = apidat['playerStatSummaries'] if 'playerStatSummaries' in apidat else None
         season = self.data['season']
         query = ("insert into stats (s_id, season, sub_type, win, lose) "
                  "values (%s, %s, %s, %s, %s) "
                  "on duplicate key update "
                  "win = values(win),"
-                 "lose = values(lose)")   
+                 "lose = values(lose)")
+        
+        if not stats:
+            return
         for stat in stats:
             modifyDate = int(stat['modifyDate'] / 1000)
             playerStatSummaryType = Util.player_stat_summary_type_convertor(
@@ -917,7 +934,7 @@ class RuneMasteryUpdator(PentakillUpdator):
         pids = []
         for page in pages:
             pageId = page['id']
-            name = page['name']
+            name = page['name'] if 'name' in page else None
             slots = page['slots'] if 'slots' in page else None
             current = page['current']
             
@@ -962,7 +979,7 @@ class RuneMasteryUpdator(PentakillUpdator):
         query4 = ("delete from masteries where s_id = %s and not find_in_set(page_id, %s)")
         pids = []
         for page in pages:
-            name = page['name']
+            name = page['name'] if 'name' in page else None
             pageId = page['id']
             masteries = page['masteries'] if 'masteries' in page else None
             current = page['current']
@@ -1119,7 +1136,7 @@ class MatchUpdator(PentakillUpdator):
         
         unknownSummoners = []
         for identity in identities:
-            print identity
+            #print identity
             sId = identity['player']['summonerId']
             unknownSummoners.append(sId)
         
@@ -1210,7 +1227,7 @@ class MatchUpdator(PentakillUpdator):
         self.db.query(query, (matchId,)).close()
             
     def _update_unknown_summoners(self, lids):
-        print 'update unknown summoners'
+        #print 'update unknown summoners'
         
         query = ("insert into summoners (s_id, s_name, s_name_abbre, enrolled) "
                  "values {0} "
@@ -1272,20 +1289,21 @@ class MatchUpdator(PentakillUpdator):
             inhibitorKills = team['inhibitorKills'] if 'inhibitorKills' in team else 0
             towerKills = team['towerKills'] if 'towerKills' in team else 0
             
-            bans = team['bans']
-            banList = [{'pickTurn':i*2+1, 'championId':None} for i in range(3)]
+            bans = team['bans'] if 'bans' in team else None
+            banList = [None for i in range(6)]
             if bans:
                 for i in range(min(3, len(bans))):
-                    if bans[i]['pickTurn'] // 2 > 3:
-                        continue
-                    banList[i] = bans[i]
-
+                    pickTurn = bans[i]['pickTurn']
+                    #print pickTurn
+                    banList[pickTurn - 1] = bans[i]
+                    
             banList.sort(key=lambda x: x['pickTurn'] if x is not None else 999)
-            #print banList
-            for i in range(len(banList)):
-                banList[i] = banList[i]['championId']
             
-            #print banList
+            for i in range(len(banList)):
+                if banList[i] is not None:
+                    banList[i] = banList[i]['championId']
+                #print banList[i]
+            
             args = (matchId, teamId, inhibitorKills, towerKills, firstTower,
                     firstBlood, firstBaron, firstInhibitor, firstDragon, winner,
                     baronKills, dragonKills, vilemawKills, banList[0], banList[1],

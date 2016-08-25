@@ -1,6 +1,6 @@
 # Pentakill update server
 
-import socket, threading, json
+import socket, threading, json, urllib, unicodedata
 from pentakill.update import updator
 from pentakill.lib import tree
 
@@ -15,7 +15,7 @@ LINE_MAX_SIZE = 1024
 HDR_SERVER = 'Pentakill Update Server'
 HDR_CONTENT_TYPE = 'text/json; charset=utf-8'
 HDR_ACCESS_CONTROL_ORIGIN = '*'
-HDR_CONNECTION = 'Keep-Alive'
+HDR_KEEP_ALIVE = 5
 
 # Update server runs in dedicated thread
 # Each connection runs in another dedicated thread
@@ -77,16 +77,19 @@ class UpdateServer(object):
             while True:
                 try:
                     conn, addr = self.sock.accept()
-                    print 'client :', addr
-                    server = Server(conn, addr, self)
+                    server = Server(n, conn, addr, self)
                     server.Daemon = True
-                    server.start()
+                    self.servers.acquire_mutex()
                     self.servers.insert(n, server)
+                    self.servers.release_mutex()
+                    # server should start after inserted to tree
+                    server.start()
                     n += 1
                 except socket.error as err:
                     break
             
-            servers = tree.RedBlackTree()
+            left_servers = tree.RedBlackTree()
+            self.servers.acquire_mutex()
             while True:
                 server = self.servers.delete_root()
                 if server is None:
@@ -98,40 +101,24 @@ class UpdateServer(object):
                 server.conn.close()
                 #print 'closed serv sock'
                 n += 1
-                servers.insert(n, server)
-                
+                left_servers.insert(n, server)
+            self.servers.release_mutex()
+            
             while True:
-                print 'delete'
-                server = servers.delete_root()
+                server = left_servers.delete_root()
                 if server is None:
                     break
-                print 'start join'
                 server.join(10)
-                print 'joined'
-            print 'exits'
-                
-class PollingInitFinal(updator.UpdatorInitFinal):
-    def __init__(self, key, tree, sema):
-        self.tree = tree
-        self.sema = sema
-        self.key = key
-    
-    def initialize(self):
-        self.sema.release()
-        
-    def finalize(self):
-        self.tree.acquire_mutex()
-        self.tree.delete(self.key)
-        self.tree.release_mutex()
-        
-    def rollback(self):
-        self.finalize()
+            print 'Server exits'
         
 class SyncInitFinal(updator.UpdatorInitFinal):
-    def __init__(self, key, tree, sema):
+    def __init__(self, key, tree):
         self.tree = tree
-        self.sema = sema
         self.key = key
+        self.cond = threading.Condition()
+        
+    def get_condition(self):
+        return self.cond
     
     def initialize(self):
         pass
@@ -139,19 +126,43 @@ class SyncInitFinal(updator.UpdatorInitFinal):
     def finalize(self):
         self.tree.acquire_mutex()
         self.tree.delete(self.key)
+        self.cond.acquire()
+        self.cond.notifyAll()
+        self.cond.release()
         self.tree.release_mutex()
-        self.sema.release()
         
     def rollback(self):
         self.finalize()
+        
+    # Assumed tree mutex is acquired before
+    # This method always releases tree mutex
+    def wait_end(self, tree):
+        self.cond.acquire()
+        tree.release_mutex()
+        self.cond.wait()
+        self.cond.release()
     
+class PollingInitFinal(SyncInitFinal):
+    def __init__(self, key, tree):
+        super(PollingInitFinal, self).__init__(key, tree)
+        self.sema = threading.Semaphore(0)
+        
+    def initialize(self):
+        self.sema.release()
+        
+    def wait_start(self):
+        self.sema.acquire()
+        
 class Server(threading.Thread):
-    def __init__(self, conn, addr, routine):
+    def __init__(self, id, conn, addr, routine):
         super(Server, self).__init__()
+        self.id = id
         self.conn, self.addr = conn, addr
         self.request, self.arg = None, None
         self.conn.settimeout(READ_TIMEOUT)
         self.module = routine.server.get_updator()
+        
+        self.servers = routine.servers
         
         self.summoner_name_tree = routine.summoner_name_tree
         self.summoner_id_tree = routine.summoner_id_tree
@@ -161,35 +172,53 @@ class Server(threading.Thread):
         self.data = None
         
     def run(self):
+        print 'client :', self.addr, 'start'
         cnt = 0
         parser = self._RequestParser(self.conn)
         sender = self._ResponseSender(self.conn)
+        close = False
         while True:
             try:
                 self.data = {}
                 parser.parse_request()
-                method, path, http = parser.get_request()
-                body = parser.get_body()
                 
-                # Check validity of request
-                if method.upper() != 'POST' or not body:
+                headers = parser.get_headers()
+                hdr_conn = parser.get_header('Connection')
+                if hdr_conn and hdr_conn == 'close':
+                    close = True
+                    #print 'connection', hdr_conn
+                
+                method, path, http = parser.get_request()
+                # Put data from request
+                method = method.upper()
+                if method == 'GET':
+                    # Get method data
+                    data = parser.get_get()
+                elif method == 'POST':
+                    body = parser.get_body()
+                    data = json.loads(body, 'utf8')
+                    #data['name'] = unicodedata.normalize('NFKD', data['name'])
+                    if 'name' in data:
+                        data['name'] = data['name'].encode('utf8')
+                else:
                     continue
-                split = path.split('/')
+                self._put_input(data)
+                
+                split = path.split('?')[0].split('/')
                 pathdir = split[1]
                 if pathdir.lower() != 'update':
                     continue
                 
-                # Body should be json data
-                data = json.loads(body)
-                
-                self._put_input(data)
-                
                 msg = self._work_for_request()
-                sender.set_body(msg)
+                
                 sender.set_status('200', 'OK')
+                sender.look_headers(headers)
+                sender.set_body(msg)
                 sender.send_respond()
                 sender.reset()
-            
+                
+                if close:
+                    break
             except (Error, socket.error) as err:
                 import traceback
                 #traceback.print_exc()
@@ -201,7 +230,10 @@ class Server(threading.Thread):
                     break
                 continue
             
-        print 'server returns'
+        print 'client :', self.addr, 'close'
+        self.servers.acquire_mutex()
+        self.servers.delete(self.id)
+        self.servers.release_mutex()
         try:
             self.conn.shutdown(socket.SHUT_RDWR)
         except socket.error:
@@ -214,7 +246,8 @@ class Server(threading.Thread):
         if 'id' in data:
             self.data['id'] = int(data['id'])
         if 'name' in data:
-            self.data['name'] = unicode(data['name'])
+            #self.data['name'] = unicode(data['name'])
+            self.data['name'] = urllib.unquote(data['name']).decode('utf8')
         if self.data['request'] == 'add':
             if 'block' in data:
                 self.data['block'] = bool(data['block'])
@@ -231,27 +264,27 @@ class Server(threading.Thread):
         
         tree = self._get_tree()
         self.data['tree'] = tree
-        val = self._retrieve_value_from_tree()
-        if val:
-            prog = val.get_progression()
-            return json.dumps({'completed':False, 'progress':prog})
-        #print 'not found tree'
+        tree.acquire_mutex()
+        res = self._lookup_tree_and_make_response()
+        
+        if res:
+            return res
+        # check update policy
         db = None
         policy = self.module.getPolicy()
-        #print id, name
         if type == 'summoner':
-            success, left, db = policy.check_summoner_update(id, name)
+            do, left, db = policy.check_summoner_update(id, name)
             
         if type == 'summoner':
-            if request == 'check' or not success:
+            if request == 'check' or not do:
                 db.close()
                 return json.dumps({'completed':True, 'left':left})
-        elif request == 'check' and type == 'match':
-            return json.dumps({'completed':True})
+        elif type == 'match' and request == 'check':
+            return json.dumps({'error':True, 
+                               'message':"can not determine if updated"})
         
-        # request is 'add'
+        # from here request is 'add'
         block = self.data['block']
-        sema = threading.Semaphore(0)
         if type == 'summoner':
             updator = self.module.getSummonerUpdator()
         elif type == 'match':
@@ -259,34 +292,37 @@ class Server(threading.Thread):
         
         key = id if id is not None else name
         if block:
-            updator.init(db, SyncInitFinal(key, tree, sema))
+            initfinal = SyncInitFinal(key, tree)
+            updator.init(db, initfinal)
         else:
-            updator.init(db, PollingInitFinal(key, tree, sema))
+            initfinal = PollingInitFinal(key, tree)
+            updator.init(db, initfinal)
         if 'id' in self.data:
             updator.put_data({'id':self.data['id']})
         else:
             updator.put_data({'name':self.data['name']})
         
+        # add to tree
+        # if update is already processing, wait
         tree.acquire_mutex()
         result = tree.insert(key, updator)
         if not result:
             updator.close()
-            updator = tree.retrieve(key)
-            prog = updator.get_progression()
-            tree.release_mutex()
-            if block:
-                return json.dumps({'error':'request fail'})
-            else:
-                return json.dumps({'completed':False, 'progress':prog})
-        #print 'inserted'
+            res = self._lookup_tree_and_make_response()
+            return res
         tree.release_mutex()
         
+        # order update
         self.module.orderUpdate(updator)
-        sema.acquire()
-        prog = updator.get_progression()
+        
+        # wait until completed or started
         if block:
+            tree.acquire_mutex()
+            initfinal.wait_end(tree)
             return json.dumps({'completed':True})
         else:
+            initfinal.wait_start()
+            prog = updator.get_progression()
             return json.dumps({'completed':False, 'progress':prog})
             
     def _check_args(self):
@@ -306,13 +342,23 @@ class Server(threading.Thread):
         else:
             raise WorkError('invalid type')
         
-    def _retrieve_value_from_tree(self):
+    # Assumed tree mutex is acquired
+    # This method always releases tree mutex
+    def _lookup_tree_and_make_response(self):
         tree = self.data['tree']
-        tree.acquire_mutex()
+        block = self.data['block'] if 'block' in self.data else False
         key = self.data['id'] if 'id' in self.data else self.data['name']
-        val = tree.retrieve(key)
-        tree.release_mutex()
-        return val
+        updator = tree.retrieve(key)
+        if updator is None:
+            tree.release_mutex()
+            return None
+        if block:
+            updator.get_initfinal().wait_end(tree)
+            return json.dumps({'completed':True})
+        else:
+            prog = updator.get_progression()
+            tree.release_mutex()
+            return json.dumps({'completed':False, 'progress':prog})
         
     def _get_tree(self):
         type = self.data['type']
@@ -331,8 +377,19 @@ class Server(threading.Thread):
             
         def reset(self):
             self.status, self.status_msg = None, None
+            self.req_headers = None
             self.headers = {}
-            self.body = None            
+            self.body = None
+            self.keep_alive = True
+            
+        def look_headers(self, headers):
+            if 'connection' in headers:
+                if headers['connection'] == 'close':
+                    self.keep_alive = False
+            
+        def add_headers(self, headers, overwrite=True):
+            for key in headers:
+                self.add_header(key, headers[key], overwrite)
             
         def add_header(self, key, value, overwrite=True):
             for name in self.headers:
@@ -354,6 +411,7 @@ class Server(threading.Thread):
             self.body = body
             
         def send_respond(self):
+            rheaders = {} if self.req_headers is None else self.req_headers
             size = 0
             if self.body:
                 size = len(self.body)
@@ -367,7 +425,10 @@ class Server(threading.Thread):
             self.add_header('Content-Type', HDR_CONTENT_TYPE, False)
             self.add_header('Access-Control-Allow-Origin', 
                             HDR_ACCESS_CONTROL_ORIGIN, False)
-            self.add_header('Connection', HDR_CONNECTION, False)
+            if self.keep_alive:
+                self.add_header('Keep-Alive', 'timeout=' + str(HDR_KEEP_ALIVE), False)
+            else:
+                self.add_header('Connection', 'close', True)
             respond_line = 'HTTP/1.1 %s %s\r\n' % (self.status, self.status_msg)
             headers = []
             for name in self.headers:
@@ -385,6 +446,7 @@ class Server(threading.Thread):
                 
         def _init(self):
             self.method, self.path, self.http = None, None, None
+            self.get = {}
             self.headers = {}
             self.body = None
             
@@ -453,6 +515,22 @@ class Server(threading.Thread):
             # We assume there is no any trailer
             return ''.join(chunks)
             
+        def _parse_get(self):
+            if self.method != 'GET':
+                return
+            
+            two = self.path.split('?')
+            if len(two) < 2:
+                return
+            
+            pairs = two[1].split('&')
+            for pair in pairs:
+                try:
+                    key, val = pair.split('=')
+                    self.get[key] = val
+                except ValueError:
+                    raise ParseError('not enough key value data')
+                
         def _parse_headers(self):
             while True:
                 header = self._readline()
@@ -460,10 +538,8 @@ class Server(threading.Thread):
                 if len(header) == 0:
                     break
                 keyval = header.split(':')
-                if len(keyval) != 2:
-                    raise ParseError('invalid header')
                 key = keyval[0].strip().lower()
-                val = keyval[1].strip().lower()
+                val = ':'.join(keyval[1:]).strip().lower()
                 self.headers[key] = val
             
         def _parse_request_start(self):
@@ -493,13 +569,21 @@ class Server(threading.Thread):
         def parse_request(self):
             self._init()
             self._parse_request_start()
+            self._parse_get()
             self._parse_headers()
             self._parse_body()
             
+        def get_get(self):
+            return self.get.copy()
+            
         def get_header(self, key):
-            if key.lower() in self.headers:
-                return self.headers[key.lower()]
+            key = key.lower()
+            if key in self.headers:
+                return self.headers[key]
             return None
+        
+        def get_headers(self):
+            return self.headers
         
         def get_request(self):
             return (self.method, self.path, self.http)
