@@ -1,6 +1,5 @@
 # Pentakill update server
-
-import socket, threading, json, urllib, unicodedata
+import socket, threading, json, urllib.request, urllib.parse, urllib.error, unicodedata
 from pentakill.update import updator
 from pentakill.lib import tree
 
@@ -9,7 +8,7 @@ IP = '0.0.0.0'
 PORT = 7777
 BACKLOG = 20
 
-READ_TIMEOUT = 100000.0
+READ_TIMEOUT = 10.0
 LINE_MAX_SIZE = 1024
 
 HDR_SERVER = 'Pentakill Update Server'
@@ -109,7 +108,6 @@ class UpdateServer(object):
                 if server is None:
                     break
                 server.join(10)
-            print 'Server exits'
         
 class SyncInitFinal(updator.UpdatorInitFinal):
     def __init__(self, key, tree):
@@ -178,7 +176,7 @@ class Server(threading.Thread):
         self.data = None
         
     def run(self):
-        print 'client :', self.addr, 'start'
+        print('client :', self.addr, 'start')
         cnt = 0
         parser = self._RequestParser(self.conn)
         sender = self._ResponseSender(self.conn)
@@ -201,9 +199,8 @@ class Server(threading.Thread):
                     # Get method data
                     data = parser.get_get()
                 elif method == 'POST':
-                    body = parser.get_body()
+                    body = parser.get_body().decode('utf8')
                     data = json.loads(body, 'utf8')
-                    #data['name'] = unicodedata.normalize('NFKD', data['name'])
                     if 'name' in data:
                         data['name'] = data['name'].encode('utf8')
                 else:
@@ -227,16 +224,19 @@ class Server(threading.Thread):
                     break
             except (Error, socket.error) as err:
                 import traceback
-                #traceback.print_exc()
-                print err
+                traceback.print_exc()
+                print(err)
                 break
             except (KeyError, ValueError, Exception) as err:
                 cnt += 1
                 if cnt >= 10:
                     break
+                import traceback
+                traceback.print_exc()
+                print(err)                
                 continue
             
-        print 'client :', self.addr, 'close'
+        print('client :', self.addr, 'close')
         self.servers.acquire_mutex()
         self.servers.delete(self.id)
         self.servers.release_mutex()
@@ -252,8 +252,7 @@ class Server(threading.Thread):
         if 'id' in data:
             self.data['id'] = int(data['id'])
         if 'name' in data:
-            #self.data['name'] = unicode(data['name'])
-            self.data['name'] = urllib.unquote(data['name']).decode('utf8')
+            self.data['name'] = urllib.parse.unquote(data['name'])
         if self.data['request'] == 'add':
             if 'block' in data:
                 self.data['block'] = bool(data['block'])
@@ -447,7 +446,7 @@ class Server(threading.Thread):
             
             message = '{0}{1}{2}'.format(*(respond_line, headers, body))
             #print 'body', body
-            self.conn.sendall(message)
+            self.conn.sendall(message.encode('utf8'))
             
     class _RequestParser(object):
         def __init__(self, conn):
@@ -461,18 +460,18 @@ class Server(threading.Thread):
             
         def _readline(self):
             size = LINE_MAX_SIZE
-            array = bytearray(size)
+            array = []
             cnt = 0
             while True:
                 c = self.conn.recv(1)
                 if not c:
                     break
-                array[cnt] = c
+                array.append(c)
                 cnt += 1
-                if cnt == size or c == '\n':
+                if cnt == size or c == b'\n':
                     break
                 
-            return str(array[:cnt])
+            return b''.join(array)
                 
         def _safe_read(self, size):
             array = []
@@ -490,7 +489,7 @@ class Server(threading.Thread):
                 if left == 0:
                     break
             
-            return ''.join(array)
+            return b''.join(array)
         
         def _chunked_read(self):
             chunks = []
@@ -499,7 +498,7 @@ class Server(threading.Thread):
                 line = self._readline()
                 
                 # check chunk-extension
-                comma = line.find(';')
+                comma = line.find(b';')
                 if comma != -1:
                     line = line[:comma]
                 else:
@@ -522,7 +521,7 @@ class Server(threading.Thread):
                 chunks.append(chunk)
                 
             # We assume there is no any trailer
-            return ''.join(chunks)
+            return b''.join(chunks)
             
         def _parse_get(self):
             if self.method != 'GET':
@@ -542,7 +541,7 @@ class Server(threading.Thread):
                 
         def _parse_headers(self):
             while True:
-                header = self._readline()
+                header = self._readline().decode('utf8')
                 header = header.strip()
                 if len(header) == 0:
                     break
@@ -552,7 +551,7 @@ class Server(threading.Thread):
                 self.headers[key] = val
             
         def _parse_request_start(self):
-            header = self._readline()
+            header = self._readline().decode('utf8')
             try:
                 method, path, http = header.strip().split(' ')
                 self.method, self.path, self.http = method, path, http
@@ -627,14 +626,17 @@ class WorkError(Error):
 if __name__ == '__main__':
     import time
     # Start server
-    print 'Pentakill Update Server 1.0'
+    print('Pentakill Update Server 1.0')
     server = UpdateServer()
     server.init()
     server.start()
-    print 'Server started'
+    print('Server started')
     try:
-        time.sleep(99999)
+        while True:
+            time.sleep(99999)
     except KeyboardInterrupt:
-        pass
+        print('Server exits by pressing CTRL + C')
+    print('Trying to shutdown server... Please wait')
     server.shutdown()
+    print('Server exits')
     

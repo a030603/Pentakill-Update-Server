@@ -296,7 +296,7 @@ class PentakillDB(DB):
 
 # test code for retrieval
 if __name__ == '__main__':    
-    print Error
+    print(Error)
     try:
         db = PentakillDB()
         db.init()
@@ -314,54 +314,54 @@ if __name__ == '__main__':
 
         #print cursor == db.cursor differenc cursor
         result = db.begin()
-        print result
+        print(result)
         result = db.query("insert into summoners (s_id, s_name, s_name_abbre) "
                           "values (1111112, \'zzzz\', \'zzzz\')")
-        print result
+        print(result)
         result.close()
         result = db.rollback()
-        print result
+        print(result)
         
         result = db.begin()
-        print result
+        print(result)
         result = db.query("insert into summoners (s_id, s_name, s_name_abbre) "
                           "values (1111112, \'zzzz\', \'zzzz\')")
-        print result
+        print(result)
         result.close()
         result = db.rollback()
-        print result
+        print(result)
         
         result = db.begin()
-        print result
+        print(result)
         result = db.query("delete from summoners "
                           "where s_id = 1111112")
-        print result
+        print(result)
         result.close()
         result = db.rollback()
-        print result        
+        print(result)        
         
         db.begin()
         result = db.query(query, data)
     
         def proc(row):
-            print 'Summonfer ' + str(row[1]), row[0].encode('cp949')
-            print result.cursor.rowcount
+            print('Summonfer ' + str(row[1]), row[0].encode('cp949'))
+            print(result.cursor.rowcount)
             return True
         i = 0
         for row in result:
-            print 'Summoner ' + str(row[1]), row[0].encode('cp949')
-            print result.cursor.rowcount            
+            print('Summoner ' + str(row[1]), row[0].encode('cp949'))
+            print(result.cursor.rowcount)            
             if i > 4:
                 break
             i = i + 1
         if result.proceed(proc): 
-            print 'success' 
+            print('success') 
         else: 
-            print 'fail'
-        print 'fetchrow', result.fetchRow()
-        print 'fetchmany1', result.fetchMany(1)
-        print 'fetchmany5', result.fetchMany(5)
-        print 'fetchall', result.fetchAll()
+            print('fail')
+        print('fetchrow', result.fetchRow())
+        print('fetchmany1', result.fetchMany(1))
+        print('fetchmany5', result.fetchMany(5))
+        print('fetchall', result.fetchAll())
         result.close()
         # show results
         #for row in result:
@@ -371,7 +371,7 @@ if __name__ == '__main__':
         cursor = cursor.execute(query2, data, True)
 
         for result in cursor:
-            print 'row',result.fetchone()
+            print('row',result.fetchone())
             
         db.commit()
         db.close()
@@ -401,7 +401,7 @@ if __name__ == '__main__':
         arg2 = ("1135567",)
         arg3 = ("2060871",)
         args = [arg, arg2, arg3, arg, arg2]
-        print 'buffered test'
+        print('buffered test')
         def test(db, query, arg, buffered):
             cursor = db.query(query, arg, buffered=buffered)
             #print '##################test#################'
@@ -443,7 +443,7 @@ if __name__ == '__main__':
                 for j in range(i+1, len(it)):
                     it[j][2] = True
                     it[j][3] = True
-            print 'test successful', num, 'tests'
+            print('test successful', num, 'tests')
                 
         # list of (query, arg, buffer, close)
         def do(args):
@@ -481,16 +481,16 @@ if __name__ == '__main__':
             result.close()
             result = db.query(query, data)
             for (name,) in result:
-                print name.encode("utf8")
+                print(name.encode("utf8"))
             result.close()
             result = db.query(delete, data2)
             result.close()
         except Error as err:
-            print "Error"
+            print("Error")
             if err.errno == errorcode.ER_PARSE_ERROR:
-                print "sql syntax error"
+                print("sql syntax error")
         else:
-            print "finish"
+            print("finish")
             db.commit()
             db.close()
 
@@ -500,13 +500,13 @@ if __name__ == '__main__':
     db.init(timeout=0.5)
     cursor = db.cursor
     results = cursor.execute('select 1; select 2; select 3;', multi=True)
-    print results != cursor
+    print(results != cursor)
     #cursor.execute('select 1;')
     for result in results:
-        print result.fetchall()
+        print(result.fetchall())
         
-    print 'second'
+    print('second')
     
     for row in cursor:
-        print row
+        print(row)
     db.close()

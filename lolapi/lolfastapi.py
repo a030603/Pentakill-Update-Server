@@ -403,7 +403,7 @@ class LOLAdmin(object):
         
     # Test request to check server state, status
     def _test_request(self, api):
-        return api.get_summoners_by_names(u'\uba38\ud53c93'.encode('utf8'))
+        return api.get_summoners_by_names(b'\xeb\xa8\xb8\xed\x94\xbc93'.decode('utf8'))
     
     def _call_synchronize(self):
         # to SS_SYNCHRONIZING substate
@@ -508,7 +508,7 @@ class LOLAdmin(object):
             # debug - show left for each core
             if self._is_debug():
                 for cor in self.cores:
-                    print 'core : ', cor.left
+                    print('core : ', cor.left)
                 
         else:
             self._debug_msg('sync failed')
@@ -685,7 +685,7 @@ class LOLAdmin(object):
     # request test data
     def get_test_data(self):
         #self._debug_msg('request test data')
-        td = self.get_data(lolapi.LOLAPI.get_summoners_by_names, (u'\uba38\ud53c93'.encode('utf8'), ))
+        td = self.get_data(lolapi.LOLAPI.get_summoners_by_names, (b'\xeb\xa8\xb8\xed\x94\xbc93'.decode('utf8'), ))
         return td
     
     # if 'mode' is true, set to debug mode
@@ -696,7 +696,7 @@ class LOLAdmin(object):
             
     def _debug_msg(self, msg):
         if self.debug:
-            print 'debug :', msg
+            print('debug :', msg)
             
     def _is_debug(self):
         return self.debug
@@ -738,6 +738,8 @@ class LOLCore(object):
     def _init_api(self):
         if not self.api:
             self.api = self.admin.api()
+            # Disable debug for production mode
+            self.api.set_debug_mode(0)
         try:
             self.api.init()
             if config.STATUS_INIT:
@@ -857,6 +859,7 @@ class LOLCore(object):
                     self.global_after_req_mutex.release()
                     self.req_condition.release()
                     break
+                
         return result
         
 # Action command got by pushing errors or status codes
@@ -1223,10 +1226,10 @@ class FastResponse(object):
             self.cond.acquire()
             self.iter = self.responses.__iter__()
             
-        def next(self):
+        def __next__(self):
             while True:
                 try:
-                    name = self.iter.next()
+                    name = next(self.iter)
                     if not self.responses[name][1]:
                         continue
                     self.responses[name][1] = False
@@ -1239,7 +1242,7 @@ class FastResponse(object):
         def close(self):
             while True:
                 try:
-                    self.iter.next()
+                    next(self.iter)
                 except StopIteration:
                     break
             self.cond.release()
@@ -1389,7 +1392,7 @@ class FastResponse(object):
     def next_response(self):
         iter = self.__iter__()
         try:
-            result = iter.next()
+            result = next(iter)
             iter.close()
             return result
         except StopIteration:
@@ -1418,9 +1421,9 @@ class FastRequest(object):
             self.iter = reqs.__iter__()
         
         # returns tuple (index of request, request tuple)
-        def next(self):
+        def __next__(self):
             try:
-                name = self.iter.next()
+                name = next(self.iter)
                 return (name, self.reqs[name])
             except StopIteration:
                 raise StopIteration()
@@ -1506,26 +1509,26 @@ class PolicyFailedError(Error):
         
 # tests
 if __name__ == '__mafin__':
-    print 'keep alive test'
+    print('keep alive test')
     API = LOLFastAPI()
     API.set_debug(True)
     API.start_multiple_get_mode()
     API.set_keep_alive(True)
     for i in range(2):
         time.sleep(10)
-        print (i + 1) * 10, 'sec elapsed'
+        print((i + 1) * 10, 'sec elapsed')
     time.sleep(2)
     API.close_multiple_get_mode()
     
 if __name__ == '__main__':
     #time.sleep(1)
-    print 'fast api multiple request test'
+    print('fast api multiple request test')
     API = LOLFastAPI()
     API.set_debug(True)
     API.start_multiple_get_mode()
     API.set_keep_alive(True)
     ids = [2577586, 2580719, 2610449, 2705388, 2706560, 2712005, 2714978, 2716219, 2726954, 2730142]
-    print 'started multiple mode'
+    print('started multiple mode')
     for i in range(20):
         req = FastRequest()
         #for i in range(10):
@@ -1554,10 +1557,10 @@ if __name__ == '__main__':
                 for name in r[1][1]:
                     name = r[1][1][name]["name"]
                     zero = False
-                print status, r[1][0], name
+                print(status, r[1][0], name)
                 
             else:
-                print status, r[1]
+                print(status, r[1])
                 zero = False
             if zero:
                 raise Exception("bug : can't see data")
@@ -1567,13 +1570,13 @@ if __name__ == '__main__':
         import random
         time.sleep(random.random() * 5)
     API.close_multiple_get_mode()
-    print 'closed multiple mode'
+    print('closed multiple mode')
     
 # Multiple threads request simultaneously multiple times with random time interval
 # If error occurs, it try again until it succeeds
 if __name__ == '__mafin__':
     import random
-    print 'admin test'
+    print('admin test')
     API = LOLAdmin()
     API.init()
     API.set_debug(True)
@@ -1603,15 +1606,15 @@ if __name__ == '__mafin__':
                 #r = 'th ' + str(self.n) +' '+ str(i) + ' : ' +'req'
                 while True:
                     try:
-                        result = API.get_data(lolapi.LOLAPI.get_summoners_by_names, (u'\uba38\ud53c93'.encode('utf8'),))
+                        result = API.get_data(lolapi.LOLAPI.get_summoners_by_names, ('\uba38\ud53c93'.encode('utf8'),))
                     except Exception as err:
                         self.s.acquire()
-                        print 'th', self.n, i, ': exception', str(err) 
+                        print('th', self.n, i, ': exception', str(err)) 
                         self.s.release()
                         if type(err) == ServiceUnavailableError:
                             while True:
                                 if API.check_service_status():
-                                    print 'th', self.n, i, ': connection is fine' 
+                                    print('th', self.n, i, ': connection is fine') 
                                     time.sleep(round(random.random()*5, 1))
                                     break
                         else:
@@ -1619,10 +1622,10 @@ if __name__ == '__mafin__':
                     else:
                         break
                 self.s.acquire()
-                print 'th', self.n, i, ' : ', result[0]
+                print('th', self.n, i, ' : ', result[0])
                 self.s.release()
             self.s.acquire()
-            print 'thread end count : ' + str(counter)
+            print('thread end count : ' + str(counter))
             counter.inc()
             self.s.release()
             

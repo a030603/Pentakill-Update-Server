@@ -5,8 +5,7 @@
 # It does not support other ip versions like IPv6 and
 # files in the request body yet.
 
-import socket
-import ssl
+import socket, ssl, urllib.parse
 import time
 import zlib
 
@@ -140,7 +139,8 @@ class HTTP(object):
             raise UnsupportedProtocol('Only HTTP 1.1 supported'
                                                , E_UNSUP_PROTOCOL)
         try:
-            return self.method + ' ' + self.loc + ' HTTP/' + proto
+            header = self.method + ' ' + self.loc + ' HTTP/' + proto
+            return header
         except TypeError as err:
             raise PythonBuiltInError("Python Built-in Error - " + str(err))
     
@@ -184,14 +184,14 @@ class HTTP(object):
         for key in self.headers:
             headers.append('%s: %s' % (key, self.headers[key]))
             
-        content = '%s\r\n\r\n' % ('\r\n'.join(headers),)
+        content = ('%s\r\n\r\n' % ('\r\n'.join(headers),)).encode('utf8')
         
         if self.body is not None:
             content += self.body
             
         if self._debug:
-            print 'headers\n', self.headers
-            print 'content\n', content 
+            print('headers\n', self.headers)
+            print('content\n', content) 
         
         if self.sock is None:
             self.connect()
@@ -354,21 +354,21 @@ class HTTPResponse(object):
     # but if we use this, we do not have to. call it again and again  << Only in buffered mode
     # Python document states file-like socket object should not have a timeout
     def _readline(self, size=C_BUFSIZE):
-        bbuf = bytearray(size)
-        cur = 0
+        bbuf = []
+        cnt = 0
         
         while 1:
             c = self.sock.recv(1)
             if len(c) == 0:
                 break
             
-            bbuf[cur] = c
-            cur += 1
+            bbuf.append(c)
+            cnt += 1
             
-            if c == '\n':
+            if c == b'\n' or cnt == size:
                 break
         
-        return str(bbuf[:cur])
+        return b''.join(bbuf)
         
     def _freadline(self):
         try:
@@ -397,34 +397,23 @@ class HTTPResponse(object):
                 raise Timeout(str(err), E_TIMEOUT)
             raise Error(str(err), E_UNKNOWN)
         
-    def _remove_crlf(self, line):
-        cur = len(line)-1
-        
-        if line[cur] == '\n':
-            cur -= 1
-            if line[cur] == '\r':
-                cur -= 1
-            
-        return line[:cur+1]
-        
     def _read_status(self):
-        header = self._freadline()
+        header = self._freadline().decode('utf8')
         if len(header) == 0:
             raise ConnectionClosed('server closed connection', E_CONNECTION_CLOSED)
         
-        split = header.split()
+        split = header.split(' ')
         
         if self._debug:
-            print "header", header
+            print("header", header)
         
         if len(split) < 3:
-            print header
             raise InvalidResponse('not sufficient arguments',
                                   E_INVALID_RESPONSE)
         
         http = split[0]
         status = split[1]
-        msg = ' '.join(split[2:])
+        msg = ' '.join(split[2:]).rstrip('\r\n')
         
         index = http.find('HTTP/')
         if index < 0:
@@ -448,9 +437,9 @@ class HTTPResponse(object):
                 raise ConnectionClosed('server closed connection', E_CONNECTION_CLOSED)
             
             if self._debug:
-                print repr(header)
+                print(repr(header))
             
-            if header == '\r\n':
+            if header == b'\r\n':
                 break
             
             self._add_header(header)
@@ -458,6 +447,7 @@ class HTTPResponse(object):
         self._parse_headers()
             
     def _add_header(self, header):
+        header = header.decode('utf8')
         sep = header.find(':')
         if sep < 0:
             #just ignore invalid header
@@ -465,24 +455,29 @@ class HTTPResponse(object):
             #raise InvalidHeader('header without \':\''
             #                             , E_INVALID_HEADER)
         cur = len(header) - 1
-        key = header[:sep]
         
-        while sep < cur:
-            if header[sep+1] == ' ':
-                sep += 1
+        try:
+            key = header[:sep]
+            
+            while sep < cur:
+                if header[sep+1] == ' ':
+                    sep += 1
+                else:
+                    break
+            
+            if header[cur] == '\n':
+                if header[cur-1] == '\r':
+                    cur -= 1
             else:
-                break
-        
-        if header[cur] == '\n':
-            if header[cur-1] == '\r':
-                cur -= 1
-        else:
-            cur += 1
-                
-        if sep >= cur:
-            self.headers[key] = ''
-        else:
-            self.headers[key] = header[sep+1:cur]
+                cur += 1
+                    
+            if sep >= cur:
+                self.headers[key] = ''
+            else:
+                value = header[sep+1:cur]
+                self.headers[key] = value
+        except Exception:
+            raise InvalidHeader('Invalid header')
     
     def hasHeader(self, hname):
         for key in self.headers:
@@ -528,7 +523,6 @@ class HTTPResponse(object):
             if trsencoding == 'chunked':
                 self.chunked = True
                 self.chunked_trailer = False
-
         
         # Parse will_close
         self.will_close = self._is_will_close()
@@ -594,7 +588,7 @@ class HTTPResponse(object):
             line = self._freadline()
             
             # check chunk-extension
-            comma = line.find(';')
+            comma = line.find(b';')
             if comma != -1:
                 line = line[:comma]
             else:
@@ -626,12 +620,12 @@ class HTTPResponse(object):
             if not line:
                 break
             # last CRLF
-            if line == '\r\n':
+            if line == b'\r\n':
                 break
             
         # we read whole message
         self.close()
-        return ''.join(chunks)
+        return b''.join(chunks)
     
     # it can fail to read all content with size 'size', it could
     # happen when EOF occurs or interrupt is caught. Then it raises error
@@ -651,7 +645,7 @@ class HTTPResponse(object):
             if not size:
                 break
             
-        return ''.join(reads)
+        return b''.join(reads)
     
     # it reads all response and decompress texts (gzip)
     # if there is no content-length and response is not chunked,
@@ -707,7 +701,7 @@ class HTTPResponse(object):
             self.conn = None
             
         if self._debug:
-            print 'msg closed'
+            print('msg closed')
             
     def getStatus(self):
         return (self.stacode, self.stamsg)
@@ -829,7 +823,7 @@ if __name__ == '__main__':
     con.sendRequest()
     msg = con.getResponse()
     content = msg.readDecompress()
-    print content
+    print(content)
     msg.close()
     con.close()
 
@@ -865,13 +859,13 @@ if __name__ == '__m3ain__':
         msg.close()
     con.close()
     end = time.time()
-    print end-begin, 'sec taken'
+    print(end-begin, 'sec taken')
     
 
 
 if __name__ == '__1main__':
-    import httplib
-    con = httplib.HTTPSConnection('kr.api.pvp.net', 443)
+    import http.client
+    con = http.client.HTTPSConnection('kr.api.pvp.net', 443)
     begin = time.time()
     for i in range(10):
         con.putrequest('GET', '/api/lol/kr/v1.3/game/by-summoner/2576538/recent?api_key='+key)
@@ -886,7 +880,7 @@ if __name__ == '__1main__':
     con.close()
     end = time.time()
     
-    print end - begin, 'sec takten for reading'
+    print(end - begin, 'sec takten for reading')
     
 if __name__ == '__2main__':
     #test codes
@@ -902,12 +896,12 @@ if __name__ == '__2main__':
         
         msg = con.getResponse()
         content = msg.readDecompress()
-        print 'content:\n', content
+        print('content:\n', content)
         msg.close()
         
     con.close()
     end = time.time()
-    print end-begin, 'sec taken'
+    print(end-begin, 'sec taken')
     
     
 if __name__ == '__m2ain__':
@@ -924,20 +918,20 @@ if __name__ == '__m2ain__':
     begin = time.time()
     try:
         msg = con.getResponse()
-        print msg.getStatus()
-        print msg.headers 
+        print(msg.getStatus())
+        print(msg.headers) 
         content = ''
         for i in range(6):
             time.sleep(1)
             content += msg.read(1)
-            print 'read', i+1, 'st'
+            print('read', i+1, 'st')
 
-        print content  
+        print(content)  
         msg.close()
     except Timeout as err:
-        print err
+        print(err)
     end = time.time()
-    print end-begin, 'sec taken for reading'
+    print(end-begin, 'sec taken for reading')
 
 if __name__ == '__main__':
     #test codes
@@ -960,9 +954,9 @@ if __name__ == '__main__':
         #print msg.getStatus()
         #print msg.headers 
         content = msg.read()
-        print content
+        print(content)
         msg.close()
     except Timeout as err:
-        print err
+        print(err)
     end = time.time()
-    print end-begin, 'sec taken for reading'
+    print(end-begin, 'sec taken for reading')

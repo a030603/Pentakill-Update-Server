@@ -3,7 +3,7 @@
 VAL = "HHH"
 
 
-__path__ = ['C:\\Python27\\lib\\pentakill\\update']
+#__path__ = ['C:\\Python34\\lib\\pentakill\\update']
 #updator = 111
 path = __path__
 update = 111

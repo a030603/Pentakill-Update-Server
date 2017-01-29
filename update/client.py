@@ -27,7 +27,7 @@ BLOCK = False
 ADD = 'add'
 ADD = 'check'
 while True:
-    print 'START LOOP'
+    print('START LOOP')
     begin = time.time()
     conn.setRequest('POST', '/update')
     conn.putHeader('Host', '127.0.0.1')
@@ -36,12 +36,12 @@ while True:
         #first = False
     else:
         body = json.dumps({'request':'check', 'type':type, IN:KEY, 'block':BLOCK})
-    print KEY
+    print(KEY)
     conn.setbody(body)
     conn.sendRequest()
     msg = conn.getResponse()
     read = msg.readDecompress()
     end = time.time()
-    print round(end - begin, 3), 'elapsed'
-    print read
+    print(round(end - begin, 3), 'elapsed')
+    print(read)
     time.sleep(0.2)

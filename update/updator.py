@@ -13,15 +13,11 @@
 # 3. call update() methods to update data
 # 4. call close() method to close DB connection
 
-from pentakill.lolapi import lolapi
-from pentakill.lolapi import lolfastapi
-from pentakill.lolapi import config
+from pentakill.lolapi import lolapi, lolfastapi, config
 from pentakill.db import connector
-from pentakill.db import error
-from pentakill.update import constant
-from pentakill.update import util
-from pentakill.lib import servant
-from pentakill.lib import progress_note
+from pentakill.db import error as dbError
+from pentakill.update import constant, util
+from pentakill.lib import servant, progress_note, error
 import threading, traceback
 
 # Simple configuration
@@ -149,7 +145,7 @@ class UpdateModule(object):
                     else:
                         continue
                 except Exception:
-                    #traceback.print_exc()
+                    traceback.print_exc()
                     pass
                 finally:
                     if updator:
@@ -178,7 +174,7 @@ class PentakillUpdatePolicy(object):
             name = Util.transform_names(name)
             result = db.query(query.format(*(where2,)), (name,))
         else:
-            raise InvalidArgumentError('id or name must be given')
+            raise error.InvalidArgumentError('id or name must be given')
         
         row = result.fetchRow()
         result.close()
@@ -247,10 +243,10 @@ class PentakillUpdator(Updator):
                                    multi=True, buffered=False)
             cursor.close()
             self.prog.reset()
-        except error.Error as e:
-            raise DBError(str(e))
+        except dbError.Error as e:
+            raise error.DBError(str(e))
         except Exception as e:
-            raise UnknownError(str(e))
+            raise error.UnknownError(str(e))
         
     def get_initfinal(self):
         try:
@@ -274,7 +270,7 @@ class PentakillUpdator(Updator):
         return self.data
         
     # pentakill generic update routine
-    # returns true for success, raise Error for failure
+    # returns true for success, raise error.Error for failure
     def update(self):
         trial = 0
         while True:
@@ -285,13 +281,13 @@ class PentakillUpdator(Updator):
                     self.initfinal.init(self)                    
                     self.initfinal.initialize()
                 self._update()
-            except (Error, error.Error, Exception) as err:
+            except (error.Error, dbError.Error, Exception) as err:
                 traceback.print_exc()
                 try:
                     raise err
-                except Error as err:
-                    errtmp = err
                 except error.Error as err:
+                    errtmp = err
+                except dbError.Error as err:
                     errtmp = DBError(str(err))
                 except Exception as err:
                     errtmp = UnknownError(str(err))
@@ -301,10 +297,10 @@ class PentakillUpdator(Updator):
                     self._rollback()
                     if self.initfinal:
                         self.initfinal.rollback()
-                except error.Error as err:
-                    raise DBError(str(err))
+                except dbError.Error as err:
+                    raise error.DBError(str(err))
                 except Exception as err:
-                    raise UnknownError(str(err))
+                    raise error.UnknownError(str(err))
                 # rollback end
                 trial += 1
                 if trial >= self.trial:
@@ -318,14 +314,14 @@ class PentakillUpdator(Updator):
                         if self.initfinal:
                             self.initfinal.finalize()
                     else:
-                        print 'debug : rollback'
+                        print('debug : rollback')
                         self.db.rollback()
                         if self.initfinal:
                             self.initfinal.rollback()
-                except error.Error as err:
-                    raise DBError(str(err))
+                except dbError.Error as err:
+                    raise error.DBError(str(err))
                 except Exception as err:
-                    raise UnknownError(str(err))
+                    raise error.UnknownError(str(err))
                 break
         return True
     
@@ -347,30 +343,30 @@ class PentakillUpdator(Updator):
         
     def _wait_response(self, respond):
         if not respond.wait_response(T_WAIT):
-            raise APITimeout("Sever do not respond too long")
+            raise error.APITimeout("Sever do not respond too long")
         
     def _wait_target_response(self, respond, list):
         try:
             ret = respond.wait_target_response(list, T_WAIT)
         except lolfastapi.TimeoutError:
-            raise APITimeout("Sever do not respond too long")
+            raise error.APITimeout("Sever do not respond too long")
         else:
             return ret
         
     # Check fastResponse response code and status code
     def _check_response(self, res, notfound=True):
         if res[0] == lolfastapi.FS_TIMEOUT:
-            raise APITimeout("Sever do not respond too long")
+            raise error.APITimeout("Sever do not respond too long")
         elif res[0] == lolfastapi.FS_SERVICE_UNAVAILABLE:
-            raise APIUnavailable("Server is not available now")
+            raise error.APIUnavailable("Server is not available now")
         elif res[0] != lolfastapi.FS_OK:
-            raise APIError("Problem with API server")
+            raise error.APIError("Problem with API server")
         
         sc = res[1][0][0]
         if notfound and sc == config.SC_NOT_FOUND:
-            raise NotFoundError("Cannot find such summoner")
+            raise error.NotFoundError("Cannot find such summoner")
         elif sc != config.SC_OK and sc != config.SC_NOT_FOUND:
-            raise APIError("Bad status code")
+            raise error.APIError("Bad status code")
             
         return sc == config.SC_OK
     
@@ -441,7 +437,7 @@ class SummonerUpdator(PentakillUpdator):
             self._update_summoner()
             res = self._get_api_response()
         else:
-            raise InvalidArgumentError("id or name must be given")
+            raise error.InvalidArgumentError("id or name must be given")
         
         target = ['leagues', 'stats', 'games', 'rank']
         while True:
@@ -461,7 +457,7 @@ class SummonerUpdator(PentakillUpdator):
             elif name == 'rank':
                 self._update_rank_champions()
             else:
-                raise UnknownError('unknown request name')
+                raise error.UnknownError('unknown request name')
                 
         self.module.orderRuneMasteryUpdate(self.data['id'])
         return True
@@ -479,26 +475,6 @@ class SummonerUpdator(PentakillUpdator):
         
         response = self.api.get_multiple_data(reqs)
         return response
-    
-    def _old_update(self):
-        self.data['season'] = season = Util.season_int_convertor(config.SEASON)
-        if 'id' in self.data:
-            print 'id'
-            self._get_api_data(summoner_by_id=True)
-            self._update_summoner()
-        elif 'name' in self.data:
-            print 'name'
-            self._get_summoner_data_by_name()
-            self._update_summoner()
-            self._get_api_data()
-        else:
-            raise InvalidArgumentError("id or name must be given")
-        self._update_leagues()
-        self._update_stats()
-        self._update_games()
-        self._update_rank_champions()
-        self.module.orderRuneMasteryUpdate(self.data['id'])
-        return True
     
     def _get_api_data(self, summoner_by_id=False):
         id = self.data['id']
@@ -535,36 +511,21 @@ class SummonerUpdator(PentakillUpdator):
         
         self._check_response(res)
         
-        data['summoner'] = res[1][1][name.decode('utf8')]
-        
-    def _get_summoner_data_by_id(self):
-        data = self.data
-        id = data['id']
-        
-        reqs = lolfastapi.FastRequest()
-        reqs.add_request_name('summoner', (lolapi.LOLAPI.get_summoners_by_ids, (id,)))
-        
-        response = self.api.get_multiple_data(reqs)
-        self._wait_response(response)
-        res = response.get_response('summoner')
-        
-        self._check_response(res)
-        #print res
-        data['summoner'] = res[1][1][str(id)]
+        data['summoner'] = res[1][1][name]
         
     def _update_summoner(self):
         while True:
             apidat = self.data['summoner']
             
             id = apidat['id']
-            name = apidat['name'].encode('utf8')
+            name = apidat['name']
             nameAbbre = Util.abbre_names(name)
             profileIconId = apidat["profileIconId"]
             summonerLevel = apidat["summonerLevel"]
             revisionDate = int(apidat["revisionDate"] / 1000)
             
-            print name.decode('utf8').encode('cp949')
-            print (id, profileIconId, summonerLevel, revisionDate)
+            print(name)
+            print((id, profileIconId, summonerLevel, revisionDate))
             
             result = self.db.query("select s_id, last_update "
                                    "from summoners where s_name_abbre = %s and live = 1", (nameAbbre,))
@@ -1019,7 +980,7 @@ class MatchUpdator(PentakillUpdator):
             return True
         self._get_match_data()
         if not self._validate_match():
-            raise UnsupportedMatchError('unsupported queue type')
+            raise error.UnsupportedMatchError('unsupported queue type')
         self.data['matchId'] = self.data['match']['matchId']
         self._update_game()
         if not self.data['details_updated']:
@@ -1060,7 +1021,8 @@ class MatchUpdator(PentakillUpdator):
                   #constant.QT_ARAM_5x5,
                   constant.QT_URF_5x5,
                   constant.QT_TEAM_BUILDER_DRAFT_UNRANKED_5x5,
-                  constant.QT_TEAM_BUILDER_DRAFT_RANKED_5x5,])
+                  constant.QT_TEAM_BUILDER_DRAFT_RANKED_5x5,
+                  constant.QT_TEAM_BUILDER_RANKED_SOLO])
         
         if Util.queue_type_convertor(queueType) in queue:
             return True
@@ -1229,11 +1191,16 @@ class MatchUpdator(PentakillUpdator):
     def _update_unknown_summoners(self, lids):
         #print 'update unknown summoners'
         
-        query = ("insert into summoners (s_id, s_name, s_name_abbre, enrolled) "
+        query = ("insert into summoners (s_id, s_name, s_name_abbre, s_icon, level, last_update, enrolled, live) "
                  "values {0} "
                  "on duplicate key update "
-                 "s_name = values(s_name),"
-                 "s_name_abbre = values(s_name_abbre)")
+                 "s_name = values(s_name), "
+                 "s_name_abbre = values(s_name_abbre), "
+                 "s_icon = values(s_icon), "
+                 "level = values(level), "
+                 "last_update = values(last_update), "
+                 "enrolled = values(enrolled), "
+                 "live = values(live)")
         
         ids = Util.list_to_str(lids)
         reqs = lolfastapi.FastRequest()
@@ -1244,15 +1211,21 @@ class MatchUpdator(PentakillUpdator):
         
         res = response.get_response('summoners')
         if self._check_response(res):
-            form = '(%s, %s, %s, 0)' + ', (%s, %s, %s, 0)' * (len(lids) - 1)
+            unit = '(%s, %s, %s, %s, %s, UNIX_TIMESTAMP(now()), false, false)'
+            form = unit + (', ' + unit) * (len(lids) - 1)
             largs = []
             for id in lids:
                 summoner = res[1][1][str(id)]
-                name = summoner['name'].encode('utf8')
+                name = summoner['name']
                 nameAbbre = Util.abbre_names(name)
+                profileIconId = summoner["profileIconId"]
+                summonerLevel = summoner["summonerLevel"]
+                revisionDate = int(summoner["revisionDate"] / 1000)
                 largs.append(id)
                 largs.append(name)
                 largs.append(nameAbbre)
+                largs.append(profileIconId)
+                largs.append(summonerLevel)
             args = tuple(largs)
             #print query.format(*(form,))
             #print args
@@ -1504,74 +1477,6 @@ class CurrentGameUpdator(PentakillUpdator):
         if 'id' in self.data:
             data['id'] = self.data['id']
         self.data = data
-            
-'''
-errno
-'''
-E_UNKNOWN = 0
-E_INVALID_ARG_ERROR = 1
-E_PYTHON_ERROR = 2
-E_NOT_FOUND_ERROR = 3           # Cannot find summoner or match
-E_DB_ERROR = 4
-E_API_ERROR = 5                 # API Error
-E_API_TIMEOUT = 6               # API Error (timeout)
-E_API_UNAVAILABLE = 7           # API problem (config or api server)
-E_TYPE_CONVERT_ERROR = 8
-E_COOLDOWN_TIME_ERROR = 9       # Wait time for next update remaining
-E_UNSUPPORTED_MATCH_ERROR = 10  # Unsupported match type
-    
-class Error(Exception):
-    def __init__(self, msg, errno=None):
-        self.msg = msg
-        self.errno = errno or -1
-        
-    def __str__(self):
-        return self.msg + " (" + str(self.errno) + ")"
-            
-class UnknownError(Error):
-    def __init__(self, msg):
-            Error.__init__(self, msg, E_UNKNOWN)
-            
-class InvalidArgumentError(Error):
-    def __init__(self, msg):
-            Error.__init__(self, msg, E_INVALID_ARG_ERROR)
-            
-class PythonBuiltInError(Error):
-    def __init__(self, msg):
-        Error.__init__(self, msg, E_PYTHON_ERROR)
-        
-class NotFoundError(Error):
-    def __init__(self, msg):
-        Error.__init__(self, msg, E_NOT_FOUND_ERROR)
-
-class DBError(Error):
-    def __init__(self, msg):
-        Error.__init__(self, msg, E_DB_ERROR)
-        
-class APIError(Error):
-    def __init__(self, msg):
-        Error.__init__(self, msg, E_API_ERROR)
-        
-class APITimeout(Error):
-    def __init__(self, msg):
-        Error.__init__(self, msg, E_API_TIMEOUT)
-
-class APIUnavailable(Error):
-    def __init__(self, msg):
-        Error.__init__(self, msg, E_API_UNAVAILABLE)
-        
-class TypeConvertError(Error):
-    def __init__(self, msg):
-        Error.__init__(self, msg, E_TYPE_CONVERT_ERROR)
-        
-class CoolTimeError(Error):
-    def __init__(self, msg):
-        Error.__init__(self, msg, E_COOLDOWN_TIME_ERROR)
-       
-class UnsupportedMatchError(Error):
-    def __init__(self, msg):
-        Error.__init__(self, msg, E_UNSUPPORTED_MATCH_ERROR)
-
        
 if __name__ == '__main__':
     import time
@@ -1579,13 +1484,13 @@ if __name__ == '__main__':
     module.init() 
     
 if __name__ == '__maign__':
-    print 'policy and init final test'
+    print('policy and init final test')
     ID = 2576538
     begin = time.time()
     policy = module.getPolicy()
     ok, left, db = policy.check_summoner_update(id=ID)
     if not ok:
-        print left, 'sec left for', ID
+        print(left, 'sec left for', ID)
         db.close()
     else:
         import threading
@@ -1593,11 +1498,11 @@ if __name__ == '__maign__':
             def __init__(self, sema):
                 self.sema = sema
             def initialize(self):
-                print 'initialize update'
-                print self.data
+                print('initialize update')
+                print(self.data)
                 
             def finalize(self):
-                print 'finalize update'
+                print('finalize update')
                 self.sema.release()
         
         sema = threading.Semaphore(0)        
@@ -1607,10 +1512,10 @@ if __name__ == '__maign__':
         module.orderUpdate(updator)
         sema.acquire()
         end = time.time()
-        print end - begin, 'elapsed'
+        print(end - begin, 'elapsed')
     
 if __name__ == '__mfain__':
-    print 'test match update'
+    print('test match update')
     data = [{'id':2526543207}, {'id':2529517584}]
     
     updator = module.getMatchUpdator()
@@ -1621,11 +1526,11 @@ if __name__ == '__mfain__':
         updator.update()
         updator.close()
         end = time.time()
-        print end - begin, 'sec elapsed'
-    print 'test passed'
+        print(end - begin, 'sec elapsed')
+    print('test passed')
     
 if __name__ == '__main__':
-    print 'test summoner update'
+    print('test summoner update')
     data = [{'name':'hide on bush', 'id':4460427}, {'id':2576538}, {'id':2060159}]
     data = [{'name':'hide on bush', 'id':44604274} for i in range(100)]
     updator = module.getSummonerUpdator()
@@ -1640,10 +1545,10 @@ if __name__ == '__main__':
             updator.update()
             updator.close()
             end = time.time()
-            print end - begin, 'sec elapsed'
+            print(end - begin, 'sec elapsed')
         except Exception as err:
                 pass
-    print 'test passed'
+    print('test passed')
 
 if __name__ == '__main__':
     module.close()

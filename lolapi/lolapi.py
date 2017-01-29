@@ -208,7 +208,7 @@ class LOLAPI(object):
         
     def _debug_print(self, name, msg):
         if self.debugMode:
-            print 'Debug mode (%s): %s' % (name, msg)
+            print('Debug mode (%s): %s' % (name, msg))
         
     def _send_request(self, type, loc):
         self._debug_print('Reuqest path', loc)
@@ -221,12 +221,12 @@ class LOLAPI(object):
         self._set_headers(type=type, loc=loc)
         try:
             conn.sendRequest()
-        
+            
             msg = conn.getResponse()
             status = msg.getStatus()
         
             try:
-                content = msg.readDecompress()
+                content = msg.readDecompress().decode('utf8')
                 #print msg.getHeaders()
             # let's parse json string into python dictionary
             except http.InvalidUseException as err:
@@ -237,6 +237,10 @@ class LOLAPI(object):
             # it should never raise exception
             self._close_type(type)
             self._init_type(type)
+            
+            import traceback
+            traceback.print_exc()
+            print(err)
             
             try:
                 raise err
@@ -710,14 +714,14 @@ if __name__ == '__maing__':
     api.set_debug_mode(1)
     begin = time.time()
     
-    print '########## summoner info ##############'
+    print('########## summoner info ##############')
     while True:
         try:
-            content = api.get_summoners_by_names(u'\uba38\ud53c93'.encode('utf8'))
-            print content[0]
+            content = api.get_summoners_by_names('\uba38\ud53c93'.encode('utf8'))
+            print(content[0])
             content = content[1]
         except Error as err:
-            print err
+            print(err)
         finally:
             time.sleep(2)
     
@@ -736,57 +740,58 @@ if __name__ == '__main__':
     api.set_debug_mode(1)
     begin = time.time()
     
-    print '########## summoner info ##############'
-    content = api.get_summoners_by_names(",".join((u'\uba38\ud53c93'.encode('utf8'),u'\uba38\ud53c94'.encode('utf8'))))
-    print content[0]
+    print('########## summoner info ##############')
+    content = api.get_summoners_by_names(','.join(['\uba38\ud53c93','\uba38\ud53c94']))
+    print(content[0])
+    print(content[1])
     content = content[1]
-    s_id = content[u'\uba38\ud53c93']['id']
-    print content[u'\uba38\ud53c93']['id']
-    print content[u'\uba38\ud53c94']['id']
+    s_id = content['\uba38\ud53c93']['id']
+    print(content['\uba38\ud53c93']['id'])
+    print(content['\uba38\ud53c94']['id'])
 
-    print '########## summoner info ##############'
+    print('########## summoner info ##############')
     content = api.get_summoners_by_ids(2576538)
-    print content[0]
+    print(content[0])
     content = content[1]
     #s_id = content[u'\uba38\ud53c93']['id']
-    print s_id
+    print(s_id)
     #print content
     
-    print '########## recent game ##############'
+    print('########## recent game ##############')
     content = api.get_recent_games(s_id)
-    print content[0]
+    print(content[0])
     content = content[1]
     #print content
     
-    print '########## league entry ##############'
+    print('########## league entry ##############')
     content = api.get_league_entries(s_id)
-    print content[0]
+    print(content[0])
     content = content[1]
     #print content    
     
-    print '########## ranked stats ##############'
+    print('########## ranked stats ##############')
     content = api.get_rank_stats(s_id)
-    print content[0]
+    print(content[0])
     content = content[1]
     #print content    
     
-    print '########## summoner runes ##############'
+    print('########## summoner runes ##############')
     content = api.get_summoner_runes(s_id)
-    print content[0]
+    print(content[0])
     content = content[1]
     #print content    
     
-    print '########## summoner masteries ##############'
+    print('########## summoner masteries ##############')
     content = api.get_summoner_masteries(s_id)
-    print content[0]
+    print(content[0])
     content = content[1]
     #print content    
     
-    print '########## current game ##############'
+    print('########## current game ##############')
     content = api.get_current_game(s_id)
-    print content[0]
+    print(content[0])
     content = content[1]
-    print content    
+    print(content)    
     
     #print '########## challenger league ##############'
     #content = api.get_leagues_of_challengers()
@@ -822,7 +827,7 @@ if __name__ == '__main__':
     #print str(content)[:1024]
     end = time.time()
     
-    print end-begin, 'sec taken'
+    print(end-begin, 'sec taken')
     api.close()
     
     
@@ -838,20 +843,20 @@ if __name__ == '__main3__':
     begin = time.time()
     try:
         for i in range(200):
-            content = api.get_summoners_by_names(u'\uba38\ud53c93'.encode('utf8'))
+            content = api.get_summoners_by_names('\uba38\ud53c93'.encode('utf8'))
             time.sleep(0.1)
-            print content[0]
+            print(content[0])
             content = content[1]
             end = time.time()
-            print end-begin,'sec taken'
+            print(end-begin,'sec taken')
         time.sleep(11)
         for i in range(100):
             #time.sleep(0.2)
-            content = api.get_summoners_by_names(u'\uba38\ud53c93'.encode('utf8'))
-            print content[0]
+            content = api.get_summoners_by_names('\uba38\ud53c93'.encode('utf8'))
+            print(content[0])
             content = content[1]
             end = time.time()
-            print end-begin,'sec taken'
+            print(end-begin,'sec taken')
     finally:
         api.close()
         
@@ -868,16 +873,16 @@ if __name__ == '__main3__':
             api = LOLAPI()
             api.set_debug_mode(0)
             api.init()
-            api.get_summoners_by_names(u'\uba38\ud53c93'.encode('utf8'))
+            api.get_summoners_by_names('\uba38\ud53c93'.encode('utf8'))
             begin = time.time()
             try:
                 for i in range(50):
                     self.s.acquire()
-                    content = api.get_summoners_by_names(u'\uba38\ud53c93'.encode('utf8'))
-                    print content[0]
+                    content = api.get_summoners_by_names('\uba38\ud53c93'.encode('utf8'))
+                    print(content[0])
                     content = content[1]
                     end = time.time()
-                    print end-begin,'sec taken', i
+                    print(end-begin,'sec taken', i)
                     self.s.release()
             finally:
                 api.close()

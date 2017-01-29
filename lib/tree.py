@@ -32,8 +32,8 @@ class Node(object):
         elif self.right is node:
             return False
         
-        print self.left, self.right, node
-        print node.left, node.right
+        print(self.left, self.right, node)
+        print(node.left, node.right)
         raise Exception("the node is not child of the parent")
     
     # Get sibling node
@@ -95,7 +95,7 @@ class BinaryTree(object):
         if node is None:
             return
         self._inorder_visit(node.left)
-        print node.key
+        print(node.key)
         self._inorder_visit(node.right)
         
     # Finds node with key 'key' and
@@ -599,9 +599,9 @@ if __name__ == '__main__':
     CORRECT = CORRECT2
     
     if TREE == TREE1:
-        print 'TEST AVL TREE'
+        print('TEST AVL TREE')
     elif TREE == TREE2:
-        print 'TEST RED BLACK TREE'
+        print('TEST RED BLACK TREE')
     
     from random import shuffle
     size = 10000
@@ -622,7 +622,7 @@ if __name__ == '__main__':
             if cnt % check_interval == 0:
                 assert(CORRECT(tree))
             cnt += 1
-        print 'Insertion end1'
+        print('Insertion end1')
         
         for i in range(size):
             assert(tree.retrieve(i) is not None)
@@ -637,7 +637,7 @@ if __name__ == '__main__':
                 for j in read:
                     assert(tree.retrieve(j) is not None)
             cnt += 1
-        print 'Deletion end1'
+        print('Deletion end1')
         
         cnt = 1
         for i in array2:
@@ -645,7 +645,7 @@ if __name__ == '__main__':
             if cnt % check_interval == 0:
                 assert(CORRECT(tree))
             cnt += 1
-        print 'Insertion end2'
+        print('Insertion end2')
         
         for i in range(size):
             assert(tree.retrieve(i) is not None)        
@@ -660,5 +660,5 @@ if __name__ == '__main__':
                 for j in read:
                     assert(tree.retrieve(j) is not None)
             cnt += 1
-        print 'Deletion end2'
+        print('Deletion end2')
         

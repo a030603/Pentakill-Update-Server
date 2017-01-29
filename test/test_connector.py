@@ -2,14 +2,14 @@
 if __name__ == '__main__':
     def assert_fetch_fail(cursor):
         try:
-            cursor.__iter__().next()
+            next(cursor.__iter__())
         except Exception:
             pass
         else:
             assert(0)
     def assert_fetch_one(cursor):
         try:
-            print cursor.__iter__().next()
+            print(next(cursor.__iter__()))
         except Exception:
             assert(0)
         else:
@@ -38,7 +38,7 @@ if __name__ == '__main__':
     try:
         cursor.execute("SELECT * FROM summoners WHERE s_id = 2576538")
     except Exception:
-        print "Double non-buffer single passed"
+        print("Double non-buffer single passed")
     assert_fetch_one(cursor)
     cursor.close()
     db.close()
@@ -51,7 +51,7 @@ if __name__ == '__main__':
     try:
         cursor2.execute("SELECT * FROM summoners WHERE s_id = 2576538")
     except Exception:
-        print "Double non-buffer multiple passed"
+        print("Double non-buffer multiple passed")
     assert_fetch_one(cursor1)
     assert_fetch_fail(cursor2)
     cursor1.close()
@@ -65,7 +65,7 @@ if __name__ == '__main__':
     assert_fetch_one(cursor)
     cursor.execute("SELECT * FROM summoners WHERE s_id = 2576538")
     assert_fetch_one(cursor)
-    print "Double buffer single passed"
+    print("Double buffer single passed")
     cursor.close()
     db.close()
     
@@ -77,7 +77,7 @@ if __name__ == '__main__':
     cursor2.execute("SELECT * FROM summoners WHERE s_id = 2576538")
     assert_fetch_one(cursor1)
     assert_fetch_one(cursor2)
-    print "Double buffer multiple passed"    
+    print("Double buffer multiple passed")    
     cursor1.close()
     cursor2.close()
     db.close()    
@@ -90,7 +90,7 @@ if __name__ == '__main__':
     try:
         cursor2.execute("SELECT * FROM summoners WHERE s_id = 2576538")
     except:
-        print "Bufferd after non-buffered passed"
+        print("Bufferd after non-buffered passed")
     #print cursor2.__iter__().next()
     assert_fetch_one(cursor1)
     assert_fetch_fail(cursor2)
@@ -106,7 +106,7 @@ if __name__ == '__main__':
     cursor2.execute("SELECT * FROM summoners WHERE s_id = 2576538")
     assert_fetch_one(cursor1)
     assert_fetch_one(cursor2)
-    print "Non-bufferd after buffered passed"
+    print("Non-bufferd after buffered passed")
     cursor1.close()
     cursor2.close()
     db.close()

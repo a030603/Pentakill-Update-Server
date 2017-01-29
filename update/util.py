@@ -1,15 +1,17 @@
 # Collection of functions frequently used for update
+from pentakill.lib import error
 from pentakill.update import constant
 
 class Utility(object):
     # Transfrom unicode string of summoner names
     def transform_names(self, names):
-        return names.lower().replace(" ", "").encode('utf8')
+        return names.lower().replace(" ", "")
     
     # Get abbrevation names
     def abbre_names(self, names):
         return names.replace(" ", "")
     
+    # League queue is same as subtype
     def league_queue_convertor(self, type):
         if type == 'RANKED_SOLO_5x5':
             return constant.S_RANKED_SOLO_5x5
@@ -18,7 +20,9 @@ class Utility(object):
         elif type == 'RANKED_TEAM_5x5':
             return constant.S_RANKED_TEAM_5x5
         
-        raise TypeConvertError("league queue conversion fail")
+        return self.subtype_convertor(type)
+        #print(type)
+        #raise error.TypeConvertError("league queue conversion fail")
     
     def league_division_convertor(self, division):
         if division == 'I':
@@ -32,7 +36,7 @@ class Utility(object):
         elif division == 'V':
             return 5
         
-        raise TypeConvertError("division conversion fail")
+        raise error.TypeConvertError("division conversion fail")
     
     def game_mode_convertor(self, mode):
         if mode == 'CLASSIC':
@@ -54,7 +58,7 @@ class Utility(object):
         elif mode == 'SIEGE':
             return constant.M_SIEGE
         
-        raise TypeConvertError("game mode conversion fail")
+        raise error.TypeConvertError("game mode conversion fail")
     
     def game_type_convertor(self, type):
         if type == 'CUSTOM_GAME':
@@ -64,7 +68,7 @@ class Utility(object):
         elif type == 'MATCHED_GAME':
             return constant.T_MATCHED_GAME
         
-        raise TypeConvertError("game type conversion fail")
+        raise error.TypeConvertError("game type conversion fail")
     
     def subtype_convertor(self, subtype):
         if subtype == 'NONE':
@@ -115,8 +119,12 @@ class Utility(object):
             return constant.S_BILGEWATER
         elif subtype == 'SIEGE':
             return constant.S_SIEGE
+        elif subtype == 'RANKED_FLEX_TT':
+            return constant.S_RANKED_FLEX_TT
+        elif subtype == 'RANKED_FLEX_SR':
+            return constant.S_RANKED_FLEX_SR
         
-        raise TypeConvertError("subtype conversion fail")
+        raise error.TypeConvertError("subtype conversion fail")
     
     def queue_type_convertor(self, type):
         if type == 'CUSTOM':
@@ -197,8 +205,13 @@ class Utility(object):
             return constant.QT_TEAM_BUILDER_DRAFT_UNRANKED_5x5
         if type == 'TEAM_BUILDER_DRAFT_RANKED_5x5':
             return constant.QT_TEAM_BUILDER_DRAFT_RANKED_5x5
+        if type == 'TEAM_BUILDER_RANKED_SOLO':
+            return constant.QT_TEAM_BUILDER_RANKED_SOLO
+        if type == 'RANKED_FLEX_SR':
+            return constant.QT_RANKED_FLEX_SR
         
-        raise TypeConvertError("queue type conversion fail")
+        print(type)
+        raise error.TypeConvertError("queue type conversion fail")
     
     def player_stat_summary_type_convertor(self, type):
         if type == 'Unranked':
@@ -237,7 +250,7 @@ class Utility(object):
             return constant.PS_RankedPremade3x3
         if type == 'RankedPremade5x5':
             return constant.PS_RankedPremade5x5
-        if type == 'NightmareBot ':
+        if type == 'NightmareBot':
             return constant.PS_NightmareBot
         if type == 'Ascension':
             return constant.PS_Ascension
@@ -251,8 +264,13 @@ class Utility(object):
             return constant.PS_Bilgewater
         if type == 'Siege':
             return constant.PS_Siege
-        print type
-        raise TypeConvertError("player stat summary type conversion fail")
+        if type == 'RankedFlexTT':
+            return constant.PS_RankedFlexTT
+        if type == 'RankedFlexSR':
+            return constant.PS_RankedFlexTT
+        
+        print(type)
+        raise error.TypeConvertError("player stat summary type conversion fail")
     
     def season_int_convertor(self, season):
         if season == constant.SEASON2013:
@@ -263,8 +281,19 @@ class Utility(object):
             return 5
         elif season == constant.SEASON2016:
             return 6
+        elif season == constant.SEASON2017:
+            return 7
         
-        raise TypeConvertError("season int conversion fail")
+        # From SEASON2014, we assume there are two forms
+        try:
+            if division.startswith('PRESEASON'):
+                return int(division[8:])
+            elif division.startswith('SEASON'):
+                return int(division[5:])
+        except ValueError:
+            pass
+        
+        raise error.TypeConvertError("season int conversion fail")
     
     def int_season_convertor(self, int):
         if int == 3:
@@ -276,7 +305,7 @@ class Utility(object):
         elif int == 6:
             return constant.SEASON2016
         
-        raise TypeConvertError("int season conversion fail")
+        raise error.TypeConvertError("int season conversion fail")
     
     def event_type_convertor(self, type):
         if type == 'BUILDING_KILL':
@@ -306,7 +335,7 @@ class Utility(object):
         elif type == 'PORO_KING_SUMMON':
             return constant.ET_PORO_KING_SUMMON
         
-        raise TypeConvertError("event type conversion fail")
+        raise error.TypeConvertError("event type conversion fail")
         
     def building_type_convertor(self, type):
         if type == 'TOWER_BUILDING':
@@ -314,7 +343,7 @@ class Utility(object):
         elif type == 'INHIBITOR_BUILDING':
             return constant.BT_INHIBITOR_BUILDING
         
-        raise TypeConvertError("building type conversion fail")
+        raise error.TypeConvertError("building type conversion fail")
     
     
     def tower_type_convertor(self, type):
@@ -331,7 +360,7 @@ class Utility(object):
         elif type == 'FOUNTAIN_TURRET':
             return constant.TT_FOUNTAIN_TURRET
         
-        raise TypeConvertError("tower type conversion fail")
+        raise error.TypeConvertError("tower type conversion fail")
     
     def lane_type_convertor(self, type):
         if type == 'TOP_LANE':
@@ -341,7 +370,7 @@ class Utility(object):
         elif type == 'BOT_LANE':
             return constant.LT_BOT_LANE
         
-        raise TypeConvertError("lane type conversion fail")
+        raise error.TypeConvertError("lane type conversion fail")
     
     def monster_type_convertor(self, type):
         if type == 'BLUE_GOLEM':
@@ -357,7 +386,7 @@ class Utility(object):
         elif type == 'RIFTHERALD':
             return constant.MT_RIFTHERALD
         
-        raise TypeConvertError("monster type conversion fail")
+        raise error.TypeConvertError("monster type conversion fail")
     
     def ward_type_convertor(self, type):
         if type == 'SIGHT_WARD':
@@ -375,7 +404,7 @@ class Utility(object):
         elif type == 'BLUE_TRINKET':
             return constant.WT_BLUE_TRINKET
         
-        raise TypeConvertError("ward type conversion fail")
+        raise error.TypeConvertError("ward type conversion fail")
     
     def lane_convertor(self, type):
         if type == 'TOP':
@@ -391,7 +420,7 @@ class Utility(object):
         elif type == 'BOT':
             return constant.L_BOTTOM
         
-        raise TypeConvertError("lane conversion fail")
+        raise error.TypeConvertError("lane conversion fail")
     
     def role_convertor(self, type):
         if type == 'DUO':
@@ -405,7 +434,7 @@ class Utility(object):
         elif type == 'DUO_SUPPORT':
             return constant.R_DUO_SUPPORT
         
-        raise TypeConvertError("role conversion fail")
+        raise error.TypeConvertError("role conversion fail")
     
     def level_up_type_convertor(self, type):
         if type == 'NORMAL':
@@ -413,7 +442,8 @@ class Utility(object):
         elif type == 'EVOLVE':
             return constant.LU_EVOLVE
         
-        raise TypeConvertError("level up type conversion fail")
+        raise error.TypeConvertError("level up type conversion fail")
     
     def list_to_str(self, list):
         return str(list)[1:-1].replace(' ', '')
+    
