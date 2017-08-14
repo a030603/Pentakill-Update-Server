@@ -38,7 +38,7 @@ C_CURRENT_GAME_REFRESH_INTERVAL = 60.0
 # Number of background updator(servants)
 C_BG_UPDATOR_NUMBER = 5
 
-Util = util.Utility()
+Util = util.Utility.getInstance()
 
 class UpdateModule(object):
     def __init__(self):
@@ -165,7 +165,7 @@ class PentakillUpdatePolicy(object):
     def check_summoner_update(self, id=None, name=None):
         db = self._get_db()
         query = ("select last_update, unix_timestamp(now()) "
-                 "from summoners {0}")
+                 "from summoners {0} and enrolled = 1")
         where1 = ("where s_id = %s")
         where2 = ("where s_name_abbre = %s")
         if id:
@@ -290,7 +290,7 @@ class PentakillUpdator(Updator):
                 except dbError.Error as err:
                     errtmp = DBError(str(err))
                 except Exception as err:
-                    errtmp = UnknownError(str(err))
+                    errtmp = error.UnknownError(str(err))
                 # rollback everything from here
                 try:
                     self.db.rollback()

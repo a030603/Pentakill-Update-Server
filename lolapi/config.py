@@ -76,7 +76,7 @@ LIMIT_TIME: time needed to release limit, in second
 
 If you don't give key when initialize, this key is used.
 '''
-KEY = '66badc84-d6f2-4a17-a609-423ae5d8f052'
+KEY = 'RGAPI-f1f7dec8-dce4-4ddf-8887-1bf63aff47d7'
 
 
 '''
@@ -86,13 +86,15 @@ form : tuple (req number, per time in sec)
 LIMIT = (10, 10.0)
 
 
-
 '''
 Season: Default season setting
-        must be one of SEASON3, SEASON2014, SEASON2015, SEASON2016
+        Since season 2014, we assume that there are two formats of seasons
+        preseason : 'PRESEASON' + year
+        season    : 'SEASON' + year
+        e.g. PRESEASON2014, SEASON2014
         You can change season when you initialize
 '''
-SEASON = 'SEASON2016'
+SEASON = 'SEASON2017'
 
 '''
 LOLAdmin configuration
@@ -142,7 +144,7 @@ LOLFastAPI configuration
 
 '''
 Servant thread number
-Servant number is the number of connection with API server
+Servant number is the maximum number of connection with riot API server
 '''
 SERVANT_NUM = 5
 

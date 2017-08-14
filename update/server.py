@@ -45,13 +45,13 @@ class UpdateServer(object):
         return self.updator
             
     def shutdown(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
-        ip = '127.0.0.1' if self.ip == '0.0.0.0' else self.ip
+        #sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
+        #ip = '127.0.0.1' if self.ip == '0.0.0.0' else self.ip
         # listening socket close must come first
         self.sock.close()
-        sock.connect((ip, self.port))
+        #sock.connect((ip, self.port))
         #time.sleep(20)
-        sock.close()
+        #sock.close()
         self.updator.close()
         self.routine.join(60)
         
@@ -193,11 +193,14 @@ class Server(threading.Thread):
                     #print 'connection', hdr_conn
                 
                 method, path, http = parser.get_request()
+                print(parser.get_request())
                 # Put data from request
                 method = method.upper()
                 if method == 'GET':
                     # Get method data
                     data = parser.get_get()
+                    if 'name' in data:
+                        data['name'] = urllib.parse.unquote(data['name'])
                 elif method == 'POST':
                     body = parser.get_body().decode('utf8')
                     data = json.loads(body, 'utf8')
@@ -213,7 +216,7 @@ class Server(threading.Thread):
                     continue
                 
                 msg = self._work_for_request()
-                
+                print(msg)
                 sender.set_status('200', 'OK')
                 sender.look_headers(headers)
                 sender.set_body(msg)

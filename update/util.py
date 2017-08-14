@@ -2,7 +2,17 @@
 from pentakill.lib import error
 from pentakill.update import constant
 
+instance = None
+
 class Utility(object):
+    # Get instance in singleton pattern
+    def getInstance():
+        global instance
+        if instance is None:
+            instance = Utility()
+        
+        return instance
+    
     # Transfrom unicode string of summoner names
     def transform_names(self, names):
         return names.lower().replace(" ", "")
@@ -57,8 +67,10 @@ class Utility(object):
             return constant.M_KINGPORO
         elif mode == 'SIEGE':
             return constant.M_SIEGE
+        elif mode == 'URF':
+            return constant.M_URF
         
-        raise error.TypeConvertError("game mode conversion fail")
+        raise error.TypeConvertError("game mode conversion fail '%s'" % (mode,))
     
     def game_type_convertor(self, type):
         if type == 'CUSTOM_GAME':
@@ -201,6 +213,8 @@ class Utility(object):
             return constant.QT_SIEGE
         if type == 'DEFINITELY_NOT_DOMINION_5x5':
             return constant.QT_DEFINITELY_NOT_DOMINION_5x5
+        if type == 'ARURF_5X5':
+            return constant.QT_ARURF_5X5
         if type == 'TEAM_BUILDER_DRAFT_UNRANKED_5x5':
             return constant.QT_TEAM_BUILDER_DRAFT_UNRANKED_5x5
         if type == 'TEAM_BUILDER_DRAFT_RANKED_5x5':
@@ -209,6 +223,8 @@ class Utility(object):
             return constant.QT_TEAM_BUILDER_RANKED_SOLO
         if type == 'RANKED_FLEX_SR':
             return constant.QT_RANKED_FLEX_SR
+        if type == 'ASSASSINATE_5x5':
+            return constant.QT_ASSASSINATE_5x5
         
         print(type)
         raise error.TypeConvertError("queue type conversion fail")
@@ -284,7 +300,7 @@ class Utility(object):
         elif season == constant.SEASON2017:
             return 7
         
-        # From SEASON2014, we assume there are two forms
+        # From SEASON2014, we assume there are two formats
         try:
             if division.startswith('PRESEASON'):
                 return int(division[8:])
