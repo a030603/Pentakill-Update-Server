@@ -30,7 +30,7 @@ giving new values to lolapi when you initialize it
 '''
 REGION = 'kr'
 PLATFORM = 'KR'
-HOST = '%s.api.pvp.net'
+HOST = '%s.api.riotgames.com'
 PORT = 443
 TIMEOUT = 4.0
 
@@ -170,6 +170,7 @@ Constants for api version
 This information needs to be updated as new version of 
 api comes out
 '''
+VERSION = '3'
 V_SUMMONER = '1.4'
 V_TEAM = '2.4'
 V_STATS = '1.3'
