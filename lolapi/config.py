@@ -76,7 +76,7 @@ LIMIT_TIME: time needed to release limit, in second
 
 If you don't give key when initialize, this key is used.
 '''
-KEY = 'RGAPI-f1f7dec8-dce4-4ddf-8887-1bf63aff47d7'
+KEY = 'RGAPI-a15deef5-19e9-40f5-80c1-64943be30bfc'
 
 
 '''
